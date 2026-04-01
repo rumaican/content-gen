@@ -122,6 +122,7 @@ export async function createVideo(video: ParsedVideo): Promise<AirtableRecord> {
     channelTitle: video.channelTitle,
     publishedAt: video.publishedAt,
     thumbnailUrl: video.thumbnailUrl,
+    status: 'discovered',
     downloadStatus: 'pending',
     transcriptStatus: 'pending',
     summaryStatus: 'pending',
