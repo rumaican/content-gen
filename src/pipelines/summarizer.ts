@@ -77,15 +77,6 @@ export interface VideoRecord {
 
 const TRANSCRIPT_DIR = process.env.TRANSCRIPT_DIR || './transcripts';
 
-const AIRTABLE_BASE = 'https://api.airtable.com/v0';
-
-function getAirtableConfig() {
-  return {
-    baseId: process.env.AIRTABLE_BASE_ID,
-    apiKey: process.env.AIRTABLE_API_KEY,
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Core Functions
 // ---------------------------------------------------------------------------
@@ -295,44 +286,38 @@ export async function summarize(
 }
 
 /**
- * Save summarization result to Airtable Posts table
+ * Save summarization result to Trello Post Tasks list
  */
-export async function saveToAirtable(result: SummarizeResult): Promise<void> {
-  const { baseId, apiKey } = getAirtableConfig();
-  
-  if (!baseId || !apiKey) {
-    console.warn('[Summarizer] Airtable credentials not configured, skipping save');
-    return;
-  }
+export async function saveToTrello(result: SummarizeResult): Promise<void> {
+  const { createPostTask } = await import('../lib/trello.js');
 
-  const url = `${AIRTABLE_BASE}/${baseId}/Posts`;
+  // Create PostTask cards for each platform's generated content
+  const postTaskId = `st_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
-  const fields: Record<string, unknown> = {
+  const summaryCard = {
+    postTaskId,
     videoId: result.videoId,
-    twitter_thread: JSON.stringify(result.summaries.twitter_thread),
-    linkedin_post: result.summaries.linkedin_post.text,
-    email_subject: result.summaries.email_subject.map((e) => `${e.subject} | ${e.preview}`).join('\n'),
-    tiktok_script: `${result.summaries.tiktok_script.hook}\n\n${result.summaries.tiktok_script.body}\n\n${result.summaries.tiktok_script.cta}`,
-    qualityScore: result.qualityScore,
-    status: 'pending',
-    costUsd: result.costUsd,
+    platform: 'summary',
+    contentType: 'multi-platform-summary',
+    priority: 2,
+    status: 'pending' as const,
+    estimatedEffort: 0,
+    routingExplanation: JSON.stringify({
+      twitter_thread: result.summaries.twitter_thread,
+      linkedin_post: result.summaries.linkedin_post,
+      email_subject: result.summaries.email_subject,
+      tiktok_script: result.summaries.tiktok_script,
+      qualityScore: result.qualityScore,
+      costUsd: result.costUsd,
+    }),
   };
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ fields }),
-  });
-
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Airtable save failed: ${res.status} ${body}`);
+  try {
+    await createPostTask(summaryCard);
+    console.log(`[Summarizer] Saved summary to Trello Post Tasks: ${result.videoId}`);
+  } catch (err) {
+    console.warn('[Summarizer] Trello save failed:', err);
   }
-
-  console.log(`[Summarizer] Saved to Airtable Posts table: ${result.videoId}`);
 }
 
 /**
@@ -343,7 +328,7 @@ export async function summarizeAndSave(
   transcriptOverride?: string
 ): Promise<SummarizeResult> {
   const result = await summarize(videoRecord, transcriptOverride);
-  await saveToAirtable(result);
+  await saveToTrello(result);
   return result;
 }
 

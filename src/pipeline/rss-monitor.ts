@@ -1,6 +1,6 @@
 /**
  * RSS Monitor — polls YouTube channel RSS feeds on a configurable interval
- * and creates new Video records in Airtable for undiscovered videos.
+ * and creates new Video records in Trello for undiscovered videos.
  *
  * Operates in two modes:
  *  - Scheduled (setInterval): runs automatically every pollIntervalMs ms
@@ -9,7 +9,7 @@
 
 import { parseRSSFeed, deduplicateVideos } from './rss-parser.js';
 import { filterNewVideos } from './duplicate-checker.js';
-import { createVideo, getSetting } from '../lib/airtable.js';
+import { createVideo } from '../lib/trello.js';
 import type { ChannelConfig, RssMonitorConfig } from './types.js';
 
 const DEFAULT_POLL_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
@@ -30,30 +30,17 @@ export async function loadConfig(): Promise<RssMonitorConfig> {
   const pollIntervalMs =
     parseInt(process.env.RSS_POLL_INTERVAL_MS || '', 10) || DEFAULT_POLL_INTERVAL_MS;
 
-  // Try to load from Airtable Settings first
-  let channels: ChannelConfig[] = [];
-  try {
-    const stored = await getSetting('RSS_CHANNELS');
-    if (stored) {
-      channels = JSON.parse(stored) as ChannelConfig[];
-    }
-  } catch {
-    // Airtable not configured or key missing — fall back to env var
-  }
+  // Parse YOUTUBE_CHANNELS env var (comma-separated channel IDs)
+  const envChannels = (process.env.YOUTUBE_CHANNELS || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean);
 
-  // Fallback: parse YOUTUBE_CHANNELS env var (comma-separated channel IDs)
-  if (channels.length === 0) {
-    const envChannels = (process.env.YOUTUBE_CHANNELS || '')
-      .split(',')
-      .map((id) => id.trim())
-      .filter(Boolean);
-
-    channels = envChannels.map((channelId) => ({
-      channelId,
-      channelTitle: channelId, // title unknown without RSS feed
-      rssUrl: `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`,
-    }));
-  }
+  const channels: ChannelConfig[] = envChannels.map((channelId) => ({
+    channelId,
+    channelTitle: channelId, // title unknown without RSS feed
+    rssUrl: `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`,
+  }));
 
   return {
     pollIntervalMs,
@@ -69,7 +56,7 @@ export async function loadConfig(): Promise<RssMonitorConfig> {
 
 /**
  * Run one full poll cycle across all configured channels.
- * Fetch → Parse → Deduplicate → Check existing → Create new in Airtable.
+ * Fetch → Parse → Deduplicate → Check existing → Create new in Trello.
  */
 export async function runPollCycle(config?: RssMonitorConfig): Promise<{ processed: number; created: number; errors: number }> {
   if (isRunning) {
@@ -140,20 +127,20 @@ async function processChannel(channel: ChannelConfig): Promise<{ processed: numb
   const uniqueVideos = deduplicateVideos(videos);
   console.log(`[rss-monitor] ${videos.length} video(s) in feed, ${uniqueVideos.length} unique`);
 
-  // Filter out already-existing videos via Airtable
+  // Filter out already-existing videos via Trello
   const newVideos = await filterNewVideos(uniqueVideos);
   console.log(`[rss-monitor] ${newVideos.length} new video(s) to create`);
 
-  // Create records in Airtable
+  // Create records in Trello
   let created = 0;
   for (const video of newVideos) {
     try {
       await createVideo(video);
       created++;
-      console.log(`[rss-monitor] Created Airtable record: ${video.videoId} — "${video.title}"`);
+      console.log(`[rss-monitor] Created Trello video card: ${video.videoId} — "${video.title}"`);
     } catch (err) {
-      // Likely a duplicate race condition or Airtable error — log and continue
-      console.error(`[rss-monitor] Failed to create record for ${video.videoId}:`, err);
+      // Likely a duplicate race condition or Trello error — log and continue
+      console.error(`[rss-monitor] Failed to create video card for ${video.videoId}:`, err);
     }
   }
 

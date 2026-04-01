@@ -1,23 +1,23 @@
 /**
- * Duplicate Checker — checks Airtable for existing videoId before creation.
- * Wraps videoExists() from airtable.ts.
+ * Duplicate Checker — checks Trello for existing videoId before creation.
+ * Wraps videoExists() from trello.ts.
  */
 
-import { videoExists } from '../lib/airtable.js';
+import { videoExists } from '../lib/trello.js';
 
 /**
- * Returns true if the videoId already exists in Airtable (duplicate).
+ * Returns true if the videoId already exists in Trello (duplicate).
  * Returns false if the video is new.
  *
- * @throws Error if the Airtable API call fails
+ * @throws Error if the Trello API call fails
  */
 export async function isDuplicate(videoId: string): Promise<boolean> {
   return videoExists(videoId);
 }
 
 /**
- * Filter an array of ParsedVideo to only those not already in Airtable.
- * Queries Airtable once per unique videoId.
+ * Filter an array of ParsedVideo to only those not already in Trello.
+ * Queries Trello once per unique videoId.
  *
  * @param videos - Array of parsed video records
  * @returns Array of videos that are NOT duplicates (safe to create)

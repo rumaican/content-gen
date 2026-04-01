@@ -9,7 +9,7 @@
  */
 
 import OpenAI from 'openai';
-import { listVideos } from '../lib/airtable.js';
+import { getVideo } from '../lib/trello.js';
 import type { PostTask } from '../router/contentRouter.js';
 import {
   buildTwitterThreadUserPrompt,
@@ -53,17 +53,15 @@ async function fetchVideoTranscript(videoId: string): Promise<{
   channelTitle: string;
   transcript: string;
 }> {
-  const formula = `{videoId}="${videoId}"`;
-  const records = await listVideos(formula);
+  const video = await getVideo(videoId);
 
-  if (records.length === 0) {
+  if (!video) {
     throw new TwitterGeneratorError(`Video record not found for videoId=${videoId}`);
   }
 
-  const fields = records[0].fields as Record<string, unknown>;
-  const title = (fields['title'] as string | undefined) ?? '(Untitled)';
-  const channelTitle = (fields['channelTitle'] as string | undefined) ?? 'Unknown Channel';
-  const transcript = (fields['transcript'] as string | null | undefined) ?? '';
+  const title = video.title ?? '(Untitled)';
+  const channelTitle = video.channelTitle ?? 'Unknown Channel';
+  const transcript = video.transcript ?? '';
 
   if (!transcript.trim()) {
     throw new TwitterGeneratorError(

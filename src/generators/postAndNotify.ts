@@ -10,7 +10,8 @@
  */
 
 import { getTwitterClient } from '../auth/twitter.js';
-import { pipelineConfig } from '../lib/airtable.js';
+import { pipelineConfig } from '../config/index.js';
+import { LISTS, trelloFetch } from '../lib/trello.js';
 import type { PostTask } from '../router/contentRouter.js';
 import type { TwitterThreadOutput } from '../prompts/twitterThread.js';
 

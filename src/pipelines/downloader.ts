@@ -7,7 +7,7 @@ import { spawn } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { pipelineConfig } from '../config/index';
-import { updateVideoRecord } from '../lib/airtable';
+import { updateVideoRecord } from '../lib/trello';
 import { getFileExt, getFileSize, ensureDir } from '../utils/fileUtils';
 
 // ---------------------------------------------------------------------------

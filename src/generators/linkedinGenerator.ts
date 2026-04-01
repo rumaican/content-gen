@@ -9,7 +9,7 @@
  */
 
 import OpenAI from 'openai';
-import { listVideos } from '../lib/airtable.js';
+import { getVideo } from '../lib/trello.js';
 import type { PostTask } from '../router/contentRouter.js';
 import {
   buildLinkedInPostUserPrompt,
@@ -57,22 +57,16 @@ interface VideoMeta {
  * Throws if the record is not found or transcript is missing.
  */
 async function fetchVideoTranscript(videoId: string): Promise<VideoMeta> {
-  const formula = `{videoId}="${videoId}"`;
-  const records = await listVideos(formula);
+  const video = await getVideo(videoId);
 
-  if (records.length === 0) {
+  if (!video) {
     throw new LinkedInGeneratorError(`Video record not found for videoId=${videoId}`);
   }
 
-  const fields = records[0].fields as Record<string, unknown>;
-  const title = (fields['title'] as string | undefined) ?? '(Untitled)';
-  const channelTitle = (fields['channelTitle'] as string | undefined) ?? 'Unknown Channel';
-  const transcript = (fields['transcript'] as string | null | undefined) ?? '';
-  // videoUrl may be stored in the record or reconstructed from videoId
-  const videoUrl =
-    (fields['videoUrl'] as string | undefined) ??
-    (fields['url'] as string | undefined) ??
-    `https://www.youtube.com/watch?v=${videoId}`;
+  const title = video.title ?? '(Untitled)';
+  const channelTitle = video.channelTitle ?? 'Unknown Channel';
+  const transcript = video.transcript ?? '';
+  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
   if (!transcript.trim()) {
     throw new LinkedInGeneratorError(

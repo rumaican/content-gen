@@ -22,7 +22,7 @@ import fs from 'fs'
 import ffmpeg from 'fluent-ffmpeg'
 import OpenAI from 'openai'
 import { postInstagramReel } from '../instagram.js'
-import { updateVideoRecord } from '../../lib/airtable.js'
+import { updateVideoRecord } from '../../lib/trello.js'
 
 const execAsync = promisify(exec)
 

@@ -5,7 +5,7 @@
  * Env vars: RESEND_API_KEY, RESEND_FROM_EMAIL (default from), RESEND_DOMAIN (verified sending domain)
  */
 
-import { sendEmail as _sendEmail, SendEmailParams } from '../../../lib/email/resend-client'
+import { sendEmail as _sendEmail, SendEmailParams } from '../../../lib/email/resend-client.js'
 
 // ---------------------------------------------------------------------------
 // sendEmail — generic sender

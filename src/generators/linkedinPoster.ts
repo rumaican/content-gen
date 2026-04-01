@@ -11,9 +11,12 @@
  */
 
 import { getStoredAccessToken, getStoredOrgId } from '../auth/linkedin.js';
-import { pipelineConfig, AIRTABLE_BASE } from '../lib/airtable.js';
+import { pipelineConfig } from '../config/index.js';
+import { LISTS, trelloFetch } from '../lib/trello.js';
 import type { PostTask } from '../router/contentRouter.js';
 import type { LinkedInPostOutput } from '../prompts/linkedinPost.js';
+
+
 
 const LINKEDIN_API_BASE = 'https://api.linkedin.com/v2';
 
@@ -249,50 +252,43 @@ async function publishArticle(
 }
 
 // ---------------------------------------------------------------------------
-// Airtable Posts table update
+// Trello PostTask helpers
 // ---------------------------------------------------------------------------
 
-async function updatePostTaskInAirtable(
+interface PostTaskCard {
+  id: string;
+  desc: string;
+}
+
+async function findPostTaskCard(videoId: string, platform: string): Promise<PostTaskCard | null> {
+  const cards = await trelloFetch(
+    `/lists/${LISTS.POST_TASKS}/cards`
+  ) as Array<{ id: string; name: string; desc: string }>;
+
+  for (const card of cards) {
+    if (card.name.includes(`[${platform}]`) && card.name.includes(videoId)) {
+      return { id: card.id, desc: card.desc };
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Trello Post Tasks card update
+// ---------------------------------------------------------------------------
+
+async function updatePostTaskInTrello(
   postTask: PostTask,
   content: LinkedInPostOutput,
   shortPostResult: PublishResult,
   articleResult: PublishResult | null
 ): Promise<void> {
-  const { AIRTABLE_BASE_ID, AIRTABLE_API_KEY } = pipelineConfig;
+  const card = await findPostTaskCard(postTask.videoId, 'linkedin');
 
-  if (!AIRTABLE_BASE_ID || !AIRTABLE_API_KEY) {
-    console.warn('[LinkedInPoster] Airtable credentials missing — skipping Posts table update');
+  if (!card) {
+    console.warn('[LinkedInPoster] No Trello PostTask card found — skipping update');
     return;
   }
-
-  // Find the PostTask record by videoId + platform
-  const filterFormula = `AND({videoId}="${postTask.videoId}", {platform}="linkedin")`;
-  const listUrl = new URL(`${AIRTABLE_BASE}/${AIRTABLE_BASE_ID}/Posts`);
-  listUrl.searchParams.set('filterByFormula', filterFormula);
-
-  const listRes = await fetch(listUrl.toString(), {
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-  });
-
-  if (!listRes.ok) {
-    const body = await listRes.text();
-    throw new LinkedInPosterError(`Airtable list PostTask failed: ${listRes.status} ${body}`);
-  }
-
-  const listData = (await listRes.json()) as {
-    records: Array<{ id: string; fields: Record<string, unknown> }>;
-  };
-
-  if (!listData.records || listData.records.length === 0) {
-    throw new LinkedInPosterError(
-      `No PostTask record found for videoId=${postTask.videoId}, platform=linkedin`
-    );
-  }
-
-  const recordId = listData.records[0].id;
 
   // Build generated content payload
   const generatedContent = {
@@ -313,31 +309,25 @@ async function updatePostTaskInAirtable(
     videoUrl: content.videoUrl,
     authorAttribution: content.authorAttribution,
     postedAt: new Date().toISOString(),
+    status: 'generated',
   };
 
-  const updateUrl = `${AIRTABLE_BASE}/${AIRTABLE_BASE_ID}/Posts/${recordId}`;
-  const updateRes = await fetch(updateUrl, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${AIRTABLE_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
+  // Merge with existing card description
+  let existing: Record<string, unknown> = {};
+  try {
+    existing = JSON.parse(card.desc || '{}');
+  } catch { /* ignore */ }
+
+  const updated = { ...existing, ...generatedContent };
+
+  await trelloFetch(`/cards/${card.id}`, {
+    method: 'PUT',
     body: JSON.stringify({
-      fields: {
-        status: 'generated',
-        generatedContent: JSON.stringify(generatedContent),
-        postedAt: new Date().toISOString(),
-        postUrl: shortPostResult.postUrl, // primary post URL
-      },
+      desc: JSON.stringify(updated),
     }),
   });
 
-  if (!updateRes.ok) {
-    const body = await updateRes.text();
-    throw new LinkedInPosterError(`Airtable update PostTask failed: ${updateRes.status} ${body}`);
-  }
-
-  console.info(`[LinkedInPoster] Updated Airtable Posts record ${recordId} → status=generated`);
+  console.info(`[LinkedInPoster] Updated Trello PostTask card ${card.id} → status=generated`);
 }
 
 // ---------------------------------------------------------------------------
@@ -345,27 +335,12 @@ async function updatePostTaskInAirtable(
 // ---------------------------------------------------------------------------
 
 async function isAlreadyGenerated(postTask: PostTask): Promise<boolean> {
-  const { AIRTABLE_BASE_ID, AIRTABLE_API_KEY } = pipelineConfig;
-
-  if (!AIRTABLE_BASE_ID || !AIRTABLE_API_KEY) return false;
-
-  const filterFormula = `AND({videoId}="${postTask.videoId}", {platform}="linkedin")`;
-  const listUrl = new URL(`${AIRTABLE_BASE}/${AIRTABLE_BASE_ID}/Posts`);
-  listUrl.searchParams.set('filterByFormula', filterFormula);
+  const card = await findPostTaskCard(postTask.videoId, 'linkedin');
+  if (!card) return false;
 
   try {
-    const res = await fetch(listUrl.toString(), {
-      headers: { Authorization: `Bearer ${AIRTABLE_API_KEY}` },
-    });
-    if (!res.ok) return false;
-
-    const data = (await res.json()) as {
-      records: Array<{ fields: Record<string, unknown> }>;
-    };
-    if (!data.records || data.records.length === 0) return false;
-
-    const status = data.records[0].fields['status'] as string | undefined;
-    return status === 'generated';
+    const data = JSON.parse(card.desc || '{}');
+    return data.status === 'generated';
   } catch {
     return false;
   }
@@ -438,10 +413,10 @@ export async function postLinkedInContent(
     }
   }
 
-  // Step 3: update Airtable
-  await updatePostTaskInAirtable(postTask, content, shortPostResult, articleResult);
+  // Step 3: update Trello Post Tasks card
+  await updatePostTaskInTrello(postTask, content, shortPostResult, articleResult);
 
-  console.info('[LinkedInPoster] Done — LinkedIn content posted and Airtable updated');
+  console.info('[LinkedInPoster] Done — LinkedIn content posted and Trello PostTask updated');
 
   return { shortPost: shortPostResult, article: articleResult };
 }

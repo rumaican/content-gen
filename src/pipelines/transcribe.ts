@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync, mkdirSync, statSync } from 'fs';
 import { resolve, basename } from 'path';
 import OpenAI from 'openai';
 import { wordsToSrt, type WordTimestamp } from '../utils/audioToSrt.js';
-import { updateVideoRecord } from '../lib/airtable.js';
+import { updateVideoRecord } from '../lib/trello.js';
 
 function getOpenAIClient(): OpenAI {
   if (!process.env.OPENAI_API_KEY) {
@@ -202,18 +202,18 @@ export async function transcribe(videoId: string, audioPath: string): Promise<Tr
     console.log(`[Transcribe] No word timestamps available, skipping SRT for ${videoId}`);
   }
 
-  // 8. Update Airtable Video record
-  const airtableFields: Record<string, unknown> = {
+  // 8. Update Trello Video record
+  const trelloFields: Record<string, unknown> = {
     transcriptStatus: 'completed',
-    transcriptText: transcript,
+    transcript: transcript,
   };
   if (srtPath) {
-    airtableFields.srtPath = srtPath;
+    trelloFields.srtPath = srtPath;
   }
 
   try {
-    await updateVideoRecord(videoId, airtableFields);
-    console.log(`[Transcribe] Updated Airtable for ${videoId}`);
+    await updateVideoRecord(videoId, trelloFields);
+    console.log(`[Transcribe] Updated Trello for ${videoId}`);
   } catch (airtableErr) {
     // Log warning but don't throw — primary output is on disk
     console.warn(`[Transcribe] Airtable update failed for ${videoId}: ${airtableErr}`);
