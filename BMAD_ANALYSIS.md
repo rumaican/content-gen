@@ -1,87 +1,61 @@
-# BMAD Analysis — Content Router
+# BMAD Analysis — Twitter Content Generator
 
 ## Card
-- **ID:** 69c9aab42a45862d6efbfc05
-- **Name:** [Content Router] Content Router
-- **ShortLink:** https://trello.com/c/ZClMP0Wp
+- **Name:** [Content Generator] Twitter Content Generator
+- **Card ID:** 69c9aab7f915e38531e251b3
+- **ShortLink:** https://trello.com/c/OBGOCRhW
 
----
+## What It Does
+Takes a PostTask from Airtable (platform=twitter) that contains a videoId, fetches the transcript/summary from Airtable Videos table, generates a 3-10 tweet thread via GPT-4o-mini, validates each tweet <280 chars, posts the thread to Twitter in order using in_reply_to_status_id threading, and updates the Airtable Posts table with status='generated'.
 
-## Analysis
+## Inputs
+- `PostTask` from Airtable Posts table:
+  - `videoId` (string) — key to look up the video record
+  - `platform` = 'twitter'
+  - `contentType` = 'text' or 'quote'
+  - `priority` (1-3)
+- `VideoRecord` from Airtable Videos table:
+  - `videoId`, `title`, `transcript`, `duration`, `tags`, `channelTitle`
 
-### Business Context
-Dispatch/routing layer of the content pipeline. After videos are transcribed and summarized, the Content Router decides which platforms (Twitter, Instagram, LinkedIn, TikTok, Email) should receive content and what type.
+## Outputs
+- Array of tweet strings + media suggestions
+- Twitter thread posted in correct order (first tweet, then replies via in_reply_to_status_id)
+- Airtable Posts table: `status` = 'generated', `generatedContent` = JSON of tweets
 
-### User Story
-As the **automated content pipeline**, I want to analyze a video's transcript and metadata and produce a set of platform-specific PostTasks, so that downstream generators receive clear instructions on what content to create for each target platform.
+## Acceptance Criteria (from card)
+- [x] Generates 3-10 tweets from a transcript summary
+- [x] Each tweet is <280 characters (hard validate)
+- [x] Thread posts in correct order (first tweet, then replies)
+- [x] Includes relevant hashtags and 1 CTA
+- [x] Media suggestion included (if video has a quotable frame)
+- [x] Airtable Posts table updated with generated content + status='generated'
 
----
+## Dependencies
+- `twitter-api-v2` — already in package.json
+- `openai` — already in package.json
+- `src/lib/airtable.ts` — already exists (Posts + Videos tables)
+- `src/auth/twitter.ts` — already exists (getTwitterClient)
+- `src/prompts/summarize.ts` — reference for prompt pattern
 
-## Acceptance Criteria Breakdown
+## Edge Cases
+1. **Transcript empty/missing** — skip generation, log warning, mark status='failed' in Posts
+2. **LLM returns >10 tweets** — cap at 10, warn
+3. **LLM returns tweet >280 chars** — hard validate: if >280, split or truncate
+4. **Rate limit hit (429)** — back off with exponential retry (50 tweets/24h new account limit)
+5. **Airtable Posts table missing generatedContent field** — gracefully skip or store as JSON string
+6. **Twitter auth expired** — throw descriptive TwitterAuthError
+7. **Duplicate generation call** — check if status already 'generated' before reprocessing
 
-| AC | Rule | Edge |
-|----|------|------|
-| AC1 | routeContent returns 3-8 PostTasks covering 2-5 platforms | standard video |
-| AC2 | duration < 60s → TikTok included | short video |
-| AC3 | transcript has >3 bullet-worthy insights → Twitter/thread included | insight-rich |
-| AC4 | long-form educational (>10min + how-to/explainer in title/tags) → LinkedIn Article | educational |
-| AC5 | missing/empty transcript → warn + return [] | no crash |
-| AC6 | platforms.json change → new rule applied without code change | configurable |
-| AC7 | PostTask saved to Airtable → status='queued', required fields populated | Airtable write |
+## File Locations (per card spec)
+- `src/prompts/twitterThread.ts` — prompt for GPT-4o-mini
+- `src/generators/twitterGenerator.ts` — main generation function
+- `src/generators/postAndNotify.ts` — posting to Twitter + Airtable update
 
----
+## Implementation Plan
+1. Create `src/prompts/twitterThread.ts` — system + user prompts + Zod schema
+2. Create `src/generators/twitterGenerator.ts` — fetch transcript → call LLM → validate → return tweets
+3. Create `src/generators/postAndNotify.ts` — thread-posting logic + Airtable update
+4. Add tests in `tests/unit/twitterGenerator.test.ts`
+5. Wire into `src/index.ts` or pipeline entry point
 
-## Technical Notes from Card
-
-**Files to create:**
-- `src/router/platforms.json` — per-platform constraints (maxLength, maxPosts, contentTypes)
-- `src/router/rules.ts` — isEligible(platform, videoRecord), scorePlatform(platform, videoRecord)
-- `src/router/contentRouter.ts` — routeContent(videoRecord) → {postTasks, routingExplanation}
-- `tests/unit/rules.test.ts` — unit tests for rules
-- `tests/unit/contentRouter.test.ts` — unit tests for router
-
-**Files to modify:**
-- `src/lib/airtable.ts` — add createPostTask helper
-
-**Airtable Posts table schema:**
-- PostTaskId (text, primary)
-- videoId (text)
-- platform (select): twitter | instagram | linkedin | tiktok | email
-- contentType (select): text, thread, caption, reel, article, drip-email
-- priority (number): 1-3
-- status (select): queued | generated | published | failed
-- estimatedEffort (number) — minutes
-- scheduledTime (datetime) — optional
-- routingExplanation (long text)
-
-**Airtable Videos table fields used:**
-- videoId, transcript, title, duration, tags, routingStatus
-
----
-
-## TDD Test Cases
-
-### rules.test.ts
-1. isEligible_returns_true_for_short_video_on_tiktok → {duration: 45} → tiktok eligible
-2. isEligible_returns_false_for_long_video_on_tiktok → {duration: 180} → tiktok NOT eligible
-3. isEligible_returns_true_for_insight_rich_transcript_on_twitter → 8 short sentences → twitter eligible
-4. isEligible_returns_false_for_short_transcript_on_twitter → 1 sentence → twitter NOT eligible
-5. scorePlatform_returns_higher_score_for_visual_hook_on_instagram → "visual hook" tag → instagram score > tiktok score
-6. isEligible_handles_missing_transcript_gracefully → {transcript: null} → no crash
-7. isEligible_respects_maxPosts_per_platform → maxPosts: 2 → max 2 posts
-
-### contentRouter.test.ts
-1. routeContent_returns_3_to_8_tasks → standard video → postTasks.length in [3,8]
-2. routeContent_returns_empty_array_for_unsupported_video → no eligible platforms → postTasks.length == 0
-3. routeContent_saves_postTasks_to_airtable → mock Airtable.create → called once per task
-
----
-
-## Key Implementation Decisions
-
-1. **TypeScript** — project uses TS, all new files will be `.ts`
-2. **Pure rules** — rules.ts will be pure functions, fully unit-testable without mocking
-3. **Airtable REST** — use fetch-based REST calls (no airtable npm package in deps)
-4. **Configurable platforms.json** — read at runtime, not hardcoded
-5. **Insight detection** — short sentences (<100 chars) separated by periods = bullet-worthy
-6. **No LLM** — rule-based only, no AI calls in this step
+## Effort: ~3 hours (per card estimate)

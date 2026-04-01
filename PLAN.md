@@ -1,207 +1,125 @@
-# Plan — Content Router
+# Plan — Twitter Content Generator
 
-## Goal
-Build the dispatch/routing layer (`Content Router`) that takes a video record with transcript and decides which platforms (Twitter, Instagram, LinkedIn, TikTok, Email) should receive content.
+## Deliverables
+1. `src/prompts/twitterThread.ts` — LLM prompt + output schema
+2. `src/generators/twitterGenerator.ts` — main generator (fetch, LLM, validate, return)
+3. `src/generators/postAndNotify.ts` — post thread to Twitter + update Airtable
+4. `tests/unit/twitterGenerator.test.ts` — unit tests
 
 ---
 
-## Step 1 — `src/router/platforms.json`
+## Step 1 — `src/prompts/twitterThread.ts`
 
-Per-platform routing constraints loaded at runtime.
+**Purpose:** Define the system/user prompt for GPT-4o-mini to generate a coherent Twitter thread.
 
-```json
-{
-  "twitter": {
-    "maxLength": 280,
-    "maxPosts": 5,
-    "contentTypes": ["text", "thread"],
-    "minDuration": 0,
-    "maxDuration": null
-  },
-  "instagram": {
-    "maxLength": 2200,
-    "maxPosts": 2,
-    "contentTypes": ["caption", "reel"],
-    "minDuration": 15,
-    "maxDuration": null
-  },
-  "tiktok": {
-    "maxLength": 150,
-    "maxPosts": 2,
-    "contentTypes": ["text-overlay"],
-    "minDuration": 0,
-    "maxDuration": 60
-  },
-  "linkedin": {
-    "maxLength": 3000,
-    "maxPosts": 1,
-    "contentTypes": ["article", "share"],
-    "minDuration": 0,
-    "maxDuration": null,
-    "longFormThreshold": 600,
-    "educationalKeywords": ["how-to", "how to", "explainer", "tutorial", "guide", "explain"]
-  },
-  "email": {
-    "maxLength": null,
-    "maxPosts": 1,
-    "contentTypes": ["drip-email"],
-    "minTranscriptLength": 100
-  }
-}
+### System Prompt
+"You are a viral tweet writer for a B2B science/tech audience. Create engaging Twitter threads from video transcripts. Each tweet must be under 280 characters. Threads should be 3-10 tweets long. Include 1-2 relevant hashtags per thread and 1 CTA (call-to-action) in the final tweet. Extract the most impactful quote from the content to suggest as a pinned tweet candidate."
+
+### User Prompt Template
+```
+Video: "{title}" by {channelTitle}
+Transcript excerpt:
+{transcript}
+
+Desired tone: {tone} (professional/casual/controversial)
 ```
 
----
-
-## Step 2 — `src/router/rules.ts`
-
-Pure functions for eligibility and scoring.
-
-### Eligibility Rules
-
-| Platform | Rule |
-|----------|------|
-| tiktok | duration < 60s (from platforms.json maxDuration) |
-| twitter | transcript has >3 bullet-worthy insights (short sentences ≤100 chars) |
-| instagram | has visual-related tags OR duration 15s–10min OR has hook phrases |
-| linkedin | long-form educational: duration >600s AND (how-to/explainer in title OR tags) |
-| email | transcript.length > minTranscriptLength (100 chars) |
-
-### Score Platform
-Each platform gets a base score of 0. Eligibile platforms get boosted:
-- tiktok: +1 if short, +2 if very short (<30s)
-- twitter: +1 per insight (max 4), +1 if tech/business keywords
-- instagram: +2 if visual tags, +1 if good duration
-- linkedin: +3 if educational keywords, +2 if long
-- email: +2 if rich transcript
-
-### Bullet-worthy Insight Detection
-- Split transcript on `. ` (period + space)
-- Count sentences ≤100 chars that aren't filler (no "um", "uh", "like ", length > 20)
-- Return count
-
----
-
-## Step 3 — `src/router/contentRouter.ts`
-
-### Main Function
+### Output Schema (TypeScript)
 ```typescript
-routeContent(videoRecord: VideoRecord): Promise<RouteResult>
-```
-
-Returns:
-```typescript
-interface RouteResult {
-  postTasks: PostTask[];
-  routingExplanation: string;
+interface TweetOutput {
+  text: string;         // max 280 chars
+  mediaSuggestion?: string; // e.g. "quote frame from 0:42"
 }
-```
-
-### Steps inside routeContent:
-1. **Validate input** — missing transcript → warn + return `{postTasks:[], routingExplanation:"No transcript"}`
-2. **Load platforms.json** — read at runtime (cached)
-3. **Analyze video** — countInsights, detectTags, isEducational, duration
-4. **Score each platform** — for each platform: isEligible + scorePlatform
-5. **Select platforms** — pick top-scoring platforms, enforce maxPosts from config
-6. **Generate PostTasks** — 1 task per platform (or maxPosts count), priority from score
-7. **Save to Airtable** — call createPostTask for each task
-8. **Return** — {postTasks, routingExplanation}
-
-### PostTask structure
-```typescript
-interface PostTask {
-  platform: 'twitter' | 'instagram' | 'linkedin' | 'tiktok' | 'email';
-  contentType: string;
-  priority: number; // 1-3, 1=highest
-  videoId: string;
-  status: 'queued';
-  estimatedEffort: number; // minutes
-  routingExplanation: string;
+interface TwitterThreadOutput {
+  tweets: TweetOutput[];
+  threadTheme: string;
+  pinnedQuote?: string;
 }
 ```
 
 ---
 
-## Step 4 — `src/lib/airtable.ts` additions
+## Step 2 — `src/generators/twitterGenerator.ts`
 
-Add to `src/lib/airtable.ts`:
+### `generateTwitterContent(postTask: PostTask): Promise<TwitterThreadOutput>`
 
+**Steps:**
+1. Look up VideoRecord from Airtable by `postTask.videoId`
+2. If no transcript → throw error with status='failed'
+3. Build user prompt with `title`, `channelTitle`, `transcript`, `tone` (from postTask or default)
+4. Call `openai.chat.completions.create` with GPT-4o-mini
+5. Parse JSON response → `TwitterThreadOutput`
+6. **Hard validate:** if any tweet > 280 chars, truncate/split
+7. **Cap:** if > 10 tweets, slice to 10
+8. Return `TwitterThreadOutput`
+
+### Validation Logic
 ```typescript
-// Posts table helper
-export interface PostTaskRecord {
-  platform: string;
-  contentType: string;
-  priority: number;
-  videoId: string;
-  status: 'queued';
-  estimatedEffort: number;
-  routingExplanation: string;
-}
-
-export async function createPostTask(task: PostTaskRecord): Promise<AirtableRecord> {
-  const url = `${baseUrl()}/Posts`;
-  const fields = {
-    PostTaskId: `pt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    videoId: task.videoId,
-    platform: task.platform,
-    contentType: task.contentType,
-    priority: task.priority,
-    status: task.status,
-    estimatedEffort: task.estimatedEffort,
-    routingExplanation: task.routingExplanation,
-  };
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: headers(),
-    body: JSON.stringify({ fields }),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Airtable createPostTask failed: ${res.status} ${body}`);
-  }
-  return (await res.json()) as AirtableCreateResponse;
+function validateTweet(text: string): string {
+  if (text.length <= 280) return text;
+  // Split on sentence boundary closest to 280
+  const split = text.lastIndexOf('. ', 275);
+  return split > 100 ? text.slice(0, split + 1) : text.slice(0, 277) + '…';
 }
 ```
 
-Also remove the stub `routeContent` from airtable.ts (replace with the real one in router).
+---
+
+## Step 3 — `src/generators/postAndNotify.ts`
+
+### `postTwitterThread(thread: TwitterThreadOutput, postTask: PostTask): Promise<void>`
+
+**Steps:**
+1. Get Twitter client via `getTwitterClient()`
+2. Post first tweet → get `tweetId`
+3. For each subsequent tweet, reply to previous tweetId (`in_reply_to_status_id`)
+4. On 429 (rate limit): exponential backoff (1s, 2s, 4s, 8s, max 5 retries)
+5. Track posted tweet IDs
+6. Update Airtable Posts table:
+   - `status` = 'generated'
+   - `generatedContent` = JSON string of `{ tweets, threadTheme, postedTweetIds }`
+   - `postedAt` = ISO timestamp
+
+### Airtable Posts Table Update
+```typescript
+async function updatePostTaskStatus(postTaskId: string, data: Record<string, unknown>) {
+  // Patch by PostTaskId field
+}
+```
 
 ---
 
-## Step 5 — Unit Tests
+## Step 4 — Wire into Pipeline
 
-### `tests/unit/rules.test.ts`
-- vitest, no mocks needed (pure functions)
-- Test all rule functions listed in BMAD_ANALYSIS.md
+Add to `src/index.ts` or create `src/pipelines/twitterPoster.ts`:
+```typescript
+// Called by main generate loop — picks up twitter PostTasks
+export async function processTwitterPostTask(postTaskId: string) {
+  const postTask = await getPostTask(postTaskId); // fetch from Airtable Posts
+  const thread = await generateTwitterContent(postTask);
+  await postTwitterThread(thread, postTask);
+}
+```
 
-### `tests/unit/contentRouter.test.ts`
-- Mock `src/lib/airtable.ts` with `vi.mock('./src/lib/airtable')`
-- Mock createPostTask to track calls
-- Test routeContent return shape and Airtable calls
+---
+
+## Acceptance Criteria Checklist
+- [x] Generates 3-10 tweets from transcript
+- [x] Each tweet <280 chars (hard validated + corrected)
+- [x] Thread posts in correct order (first tweet, then replies via in_reply_to_status_id)
+- [x] Includes relevant hashtags and 1 CTA in final tweet
+- [x] Media suggestion included per tweet
+- [x] Airtable Posts table updated with status='generated' + generatedContent JSON
 
 ---
 
 ## Edge Cases
-
-1. **Missing optional fields** (tags: undefined) → treat as empty array, no crash
-2. **Transcript is whitespace only** → treat as empty, return []
-3. **All platforms ineligible** → return {postTasks: [], routingExplanation: "No eligible platforms"}
-4. **Airtable API failure** → throw descriptive error (not silent)
-5. **platforms.json missing fields** → use defaults (0, null, [])
-6. **Very long transcript** → insight detection capped at first 5000 chars for performance
-7. **Priority ties** → prefer platforms with higher base priority (linkedin=3, twitter=2, etc.)
-
----
-
-## Definition of Done Checklist
-
-- [ ] routeContent returns 3-8 PostTasks for standard video
-- [ ] PostTasks saved to Airtable with status='queued'
-- [ ] platforms.json change alters routing without code change
-- [ ] Empty transcript → warn + return [] (no crash)
-- [ ] Malformed videoRecord → error log + return [] (no crash)
-- [ ] Video <60s → TikTok included
-- [ ] No eligible platforms → empty array (not error)
-- [ ] Airtable failure → descriptive error thrown
-- [ ] routeContent < 500ms (no blocking I/O)
-- [ ] routingExplanation included on each PostTask
-- [ ] Unit tests for rules.ts and contentRouter.ts (>80% coverage intent)
-- [ ] Info-level logging for routing decisions
+| Edge Case | Handling |
+|-----------|----------|
+| Empty transcript | Throw error, set status='failed' in Posts table |
+| Tweet > 280 chars | Truncate at sentence boundary near 280 |
+| > 10 tweets | Cap at 10, log warning |
+| 429 rate limit | Exponential backoff: 1→2→4→8s, max 5 retries |
+| Status already 'generated' | Skip (idempotent) |
+| Twitter auth expired | Propagate TwitterAuthError |
+| Airtable Posts table missing field | Gracefully skip optional fields |
