@@ -1,74 +1,86 @@
-# BMAD_ANALYSIS.md — LinkedIn Content Generator
+# BMAD Analysis — TikTok Text Overlay Generator
 
 ## Card Summary
-- **What:** Generate LinkedIn posts and articles from video content (transcript + summary)
-- **Input:** PostTask (platform=linkedin) with videoId → fetch from Videos table
-- **Output:** Short post (150-300 chars) + long-form article (800-3000 chars), published to LinkedIn, saved to Airtable
+- **What:** Takes a TikTok video + SRT transcript → outputs MP4 with timed captions burned in using FFmpeg
+- **Target:** TikTok-ready portrait 9:16 MP4 with readable animated captions
 
-## Acceptance Criteria (ACs)
-1. ✅ Generates both short post (150-300 chars) and long-form article
-2. ✅ Article includes 3-5 bullet points with key takeaways
-3. ✅ All posts include video link + author attribution
-4. ✅ Successfully publishes to LinkedIn (user or Company Page)
-5. ✅ Returns permalink and saves to Airtable Posts table
+---
 
-## Existing Codebase Patterns
-- `src/generators/twitterGenerator.ts` — canonical generator pattern (fetch video, LLM call, validate, return)
-- `src/prompts/twitterThread.ts` — prompt + output types in same file
-- `src/platforms/linkedin.ts` — `postShare()`, `fetchLinkedInProfile()` already exist
-- `src/auth/linkedin.ts` — OAuth + token storage (`getStoredAccessToken()`, `getStoredOrgId()`)
-- `src/lib/airtable.ts` — `listVideos()`, `pipelineConfig`
-- `src/router/contentRouter.ts` — `PostTask` type: `{ platform, contentType, priority, videoId, status, estimatedEffort, routingExplanation }`
+## Functional Requirements (from AC)
 
-## Key Design Decisions
+| # | Criterion | Implication |
+|---|-----------|-------------|
+| AC1 | Takes video + SRT → outputs MP4 with timed captions | Core flow: read SRT, apply drawtext overlay, write MP4 |
+| AC2 | Portrait 9:16 format (1080x1920) | FFmpeg scale/crop or direct -vf scale=1080:1920 |
+| AC3 | Text readable (contrast, size, positioning) | Style: white text, 2-3px black stroke, drop shadow, font size ≥24pt |
+| AC4 | Completes in <2x video length | Streaming passthrough where possible; no re-encode of video stream unless needed |
+| AC5 | Caption timing within 200ms accuracy | SRT timestamps used directly; no LLM re-timing of segments |
 
-### Generator ↔ Poster Split
-Following Twitter's pattern (`twitterGenerator.ts` → `postAndNotify.ts`), split into:
-- `linkedinGenerator.ts` — LLM generation only (pure, testable)
-- `linkedinPoster.ts` — API publish + Airtable update (side-effectful)
+---
 
-### Output Shape
-```typescript
-interface LinkedInContentOutput {
-  shortPost: string;       // 150-300 chars
-  articleTitle: string;    // headline
-  articleBody: string;     // 800-3000 chars with bullets
-  videoUrl: string;        // source video link
-  authorAttribution: string;
+## Non-Functional Requirements
+
+- **Progress events:** emit percentage via FFmpeg `-progress` flag
+- **Error handling:** corrupt video, SRT format mismatch, FFmpeg crash, missing dependencies
+- **TikTok-safe output:** H.264 video, AAC audio, 30fps, CRF 23, max 3min
+- **Dependencies:** fluent-ffmpeg (already in package.json), openai (already in package.json)
+
+---
+
+## Solutioning — Edge Cases
+
+### EC1: SRT timestamps don't match video duration
+- If SRT end-time exceeds video duration, trim SRT entries past video end
+- If SRT start-time is before 0, clamp to 0
+- Validate SRT is parseable before running FFmpeg
+
+### EC2: Video is not 9:16 portrait
+- Scale + crop to fill 1080x1920 (center crop), or pad with blur background
+- Default behavior: center-crop short edge, scale long edge to target
+- Document as configurable `padStyle: 'crop' | 'blur'` in options
+
+### EC3: Very long videos (>3min TikTok limit)
+- Warn if video >180s; allow configurable `maxDuration`
+- Hard cut at maxDuration if exceeds
+
+### EC4: Missing FFmpeg binary
+- Check `ffmpeg -version` on init; throw descriptive error if not found
+- Provide install hint in error message
+
+### EC5: Empty SRT (no captions)
+- If SRT has 0 subtitle entries, output video unchanged (passthrough)
+- Emit warning event
+
+### EC6: Overlapping SRT entries
+- SRT format can have overlapping timestamps; FFmpeg drawtext handles this natively
+
+### EC7: Non-ASCII characters in SRT (Polish, etc.)
+- Use UTF-8 encoding; FFmpeg drawtext supports UTF-8 with fontconfig
+- Force font that supports Unicode (e.g., not Impact for non-ASCII — use bold sans-serif)
+
+### EC8: Progress reporting
+- FFmpeg `-progress` pipe output parsed line-by-line; emit `progress(0-100)` events
+
+---
+
+## Architecture
+
+```
+src/generators/tiktokTextOverlay.ts   ← main generator function
+src/utils/ffmpegUtils.ts               ← FFmpeg wrapper, progress, error handling
+```
+
+Input types:
+```ts
+interface TikTokOverlayInput {
+  videoPath: string;       // local MP4 path
+  srtPath: string;         // SRT file from Whisper
+  options?: {
+    padStyle?: 'crop' | 'blur';  // how to handle non-9:16 video
+    maxDuration?: number;        // seconds; default 180
+    outputPath?: string;         // default: outputs/tiktok-captioned-{uuid}.mp4
+  }
 }
 ```
 
-### Content Types (from platforms.json)
-- `share` → short post (150-300 chars)
-- `article` → long-form (800-3000 chars, formatted with bullets)
-
-### LinkedIn API
-- User post: `POST /v2/ugcPosts` with author=`urn:li:person:{me}`
-- Org post: `POST /v2/ugcPosts` with author=`urn:li:organization:{orgId}`
-- Articles: `shareMediaCategory: 'ARTICLE'` + `title` field in `specificContent`
-
-### LLM Strategy
-- Model: `gpt-4o-mini` (same as Twitter, cost-efficient)
-- Single LLM call with structured JSON returning both short + long-form
-- Fall back to separate calls if needed
-
-### Prompt Design
-- System: LinkedIn thought leader persona
-- User: transcript excerpt + title + channel metadata
-- Output: JSON with shortPost + articleTitle + articleBody + bulletPoints[]
-
-### Validation
-- shortPost: ≤300 chars, ≥150 chars
-- articleBody: ≤3000 chars, ≥800 chars
-- bulletPoints: 3-5 items
-- Both include video link + author
-
-## Edge Cases
-1. **Empty/short transcript** → throw `LinkedInGeneratorError`, don't publish garbage
-2. **LLM returns markdown** → strip ```json fences before JSON.parse
-3. **Already generated** → idempotency check via Airtable status='generated'
-4. **LinkedIn API 429** → exponential backoff retry (up to 5 attempts)
-5. **No OAuth token** → clear error message pointing to OAuth setup
-6. **Video link missing** → use channel URL as fallback attribution
-7. **Bullets too long** → validate each bullet individually
-8. **Long transcript** → truncate to 12k chars (same as Twitter)
+Output: `{ outputPath: string, duration: number }`
