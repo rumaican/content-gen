@@ -12,6 +12,7 @@
     "poll-rss": "tsx scripts/poll-rss.ts"
   },
   "dependencies": {
+    "axios": "^1.14.0",
     "dotenv": "^16.4.5",
     "fast-xml-parser": "^4.5.0",
     "fluent-ffmpeg": "^2.1.3",
