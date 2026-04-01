@@ -6,5 +6,6 @@
 export { downloadVideo } from './downloader.js'
 export { fetchYouTubeRSS } from './rss.js'
 export { transcribeVideo } from './transcriber.js'
+export { transcribe } from './transcribe.js'
 export { summarize, saveToAirtable, summarizeAndSave, summarizeContent } from './summarizer.js'
 export { routeContent } from './router.js'
