@@ -256,3 +256,14 @@ export async function updateVideoRecord(
     throw new Error(`Airtable updateVideoRecord failed: ${res.status} ${body}`);
   }
 }
+
+/**
+ * Update a social-media post record in Airtable.
+ * Stub implementation — logs the update.
+ */
+export async function updatePostRecord(
+  recordId: string,
+  data: { status?: string; platform?: string; permalink?: string; [key: string]: unknown }
+): Promise<void> {
+  console.log('Airtable post record update (stub):', recordId, data);
+}

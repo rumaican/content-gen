@@ -17,11 +17,14 @@ import ffmpeg from 'fluent-ffmpeg'
 import { writeFile, mkdir } from 'fs/promises'
 import { join } from 'path'
 import { existsSync } from 'fs'
+import axios from 'axios'
 
 // ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
+const INSTAGRAM_ACCOUNT_ID = process.env.INSTAGRAM_ACCOUNT_ID
+const INSTAGRAM_ACCESS_TOKEN = process.env.INSTAGRAM_ACCESS_TOKEN
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY
 const OUTPUT_DIR = join(process.cwd(), 'outputs', 'instagram')
 
@@ -33,6 +36,19 @@ const IMAGE_SPECS = {
 }
 
 const CAPTION_MAX_CHARS = 2200
+
+// Instagram API helpers
+async function instagramGet(path: string, params: Record<string, string> = {}): Promise<unknown> {
+  const url = `https://graph.facebook.com/v19.0${path}`
+  const res = await axios.get(url, { params: { ...params, access_token: INSTAGRAM_ACCESS_TOKEN } })
+  return res.data
+}
+
+async function instagramPost(path: string, data: Record<string, unknown> = {}): Promise<unknown> {
+  const url = `https://graph.facebook.com/v19.0${path}`
+  const res = await axios.post(url, data, { params: { access_token: INSTAGRAM_ACCESS_TOKEN } })
+  return res.data
+}
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -242,6 +258,122 @@ export async function generateCaptionAndHashtags(
   }
 
   return { caption: mainCaption, hashtags, fullCaption }
+}
+
+// ---------------------------------------------------------------------------
+// createCarouselPost — carousel post creation
+// ---------------------------------------------------------------------------
+
+export interface CreateCarouselPostOptions {
+  /** Path to the source video (used if imageUrls not provided) */
+  videoPath: string
+  /** AI-generated summary for caption generation */
+  summary: string
+  /** Timestamps for carousel slides (used if extracting from video) */
+  timestamps?: number[]
+  /** Pre-uploaded image URLs for carousel (2-10 images) */
+  imageUrls?: string[]
+  /** Override for auto-generated caption */
+  captionOverride?: string
+  /** Override for auto-generated hashtags */
+  hashtagsOverride?: string[]
+  /** Airtable record ID to update after publishing */
+  airtableRecordId?: string
+}
+
+export interface CarouselPostResult {
+  postId: string
+  containerId: string
+  permalink: string
+}
+
+/**
+ * Create and publish an Instagram carousel post.
+ *
+ * @param options — Carousel post options
+ */
+export async function createCarouselPost(
+  options: CreateCarouselPostOptions
+): Promise<CarouselPostResult> {
+  const { videoPath, summary, timestamps = [], imageUrls, captionOverride, hashtagsOverride, airtableRecordId } = options
+
+  // Validate Instagram credentials
+  if (!INSTAGRAM_ACCESS_TOKEN || !INSTAGRAM_ACCOUNT_ID) {
+    throw new InstagramPostGeneratorError('Instagram is not configured.')
+  }
+
+  // Validate video path if no imageUrls provided
+  if (!imageUrls && !existsSync(videoPath)) {
+    throw new InstagramPostGeneratorError('Source video not found.')
+  }
+
+  // Validate image count
+  const images = imageUrls ?? []
+  if (images.length < 2) {
+    throw new InstagramPostGeneratorError('At least 2 image URLs are required for a carousel.')
+  }
+  if (images.length > 10) {
+    throw new InstagramPostGeneratorError('At most 10 images are allowed for a carousel.')
+  }
+
+  // Generate caption + hashtags
+  const { caption, hashtags, fullCaption } = await generateCaptionAndHashtags(summary, {
+    hashtagsOverride,
+  })
+
+  const finalCaption = captionOverride ? `${captionOverride}\n\n${hashtags.join(' ')}` : fullCaption
+
+  // Step 1: Create carousel container
+  const containerRes = await instagramPost(`/me/media`, {
+    media_type: 'CAROUSEL',
+    caption: finalCaption,
+  }) as { id: string }
+
+  const containerId = containerRes.id
+
+  // Step 2: Add each image as child media
+  for (const imageUrl of images) {
+    await instagramPost(`/me/media`, {
+      media_type: 'IMAGE',
+      image_url: imageUrl,
+      parent_media_id: containerId,
+    })
+  }
+
+  // Step 3: Publish carousel
+  const publishRes = await instagramPost(`/me/media/${containerId}`, {
+    access_token: INSTAGRAM_ACCESS_TOKEN,
+  }) as { id: string }
+
+  // Step 4: Get permalink
+  const mediaList = await instagramGet(`/${INSTAGRAM_ACCOUNT_ID}/media`, {
+    fields: 'permalink,id',
+    limit: '1',
+  }) as { data: Array<{ id: string; permalink: string }> }
+
+  const latestMedia = mediaList.data?.[0]
+  const permalink = latestMedia?.permalink ?? `https://www.instagram.com/p/${publishRes.id}/`
+
+  // Step 5: Update Airtable if record ID provided
+  if (airtableRecordId) {
+    try {
+      const { updatePostRecord } = await import('../../lib/airtable.js')
+      await updatePostRecord(airtableRecordId, {
+        status: 'published',
+        platform: 'instagram_carousel',
+        permalink,
+      })
+    } catch (err) {
+      // Non-blocking: log and continue
+      console.warn('Airtable update failed:', err)
+    }
+  }
+
+  return {
+    postId: publishRes.id,
+    containerId,
+    permalink,
+  }
 }
 
 // ---------------------------------------------------------------------------
