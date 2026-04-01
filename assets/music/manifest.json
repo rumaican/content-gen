@@ -1,0 +1,44 @@
+[
+  {
+    "filename": "upbeat-viral.mp3",
+    "mood": "upbeat",
+    "bpm": 120,
+    "duration": 30,
+    "title": "Upbeat Viral"
+  },
+  {
+    "filename": "energetic-catchy.mp3",
+    "mood": "upbeat",
+    "bpm": 110,
+    "duration": 30,
+    "title": "Energetic Catchy"
+  },
+  {
+    "filename": "chill-lofi.mp3",
+    "mood": "chill",
+    "bpm": 85,
+    "duration": 30,
+    "title": "Chill Lo-Fi"
+  },
+  {
+    "filename": "relaxed-vibes.mp3",
+    "mood": "chill",
+    "bpm": 90,
+    "duration": 30,
+    "title": "Relaxed Vibes"
+  },
+  {
+    "filename": "cinematic-epic.mp3",
+    "mood": "cinematic",
+    "bpm": 100,
+    "duration": 30,
+    "title": "Cinematic Epic"
+  },
+  {
+    "filename": "emotional-piano.mp3",
+    "mood": "cinematic",
+    "bpm": 75,
+    "duration": 30,
+    "title": "Emotional Piano"
+  }
+]
