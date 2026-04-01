@@ -8,7 +8,8 @@
     "test:run": "vitest run",
     "download": "tsx scripts/download.ts",
     "transcribe": "tsx scripts/transcribe.ts",
-    "generate": "tsx src/index.ts"
+    "generate": "tsx src/index.ts",
+    "poll-rss": "tsx scripts/poll-rss.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
