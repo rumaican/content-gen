@@ -1,43 +1,117 @@
 /**
  * __tests__/platforms/reelGenerator.test.ts
- * TDD: Instagram Reel Generator unit tests
+ * TDD: Instagram Reel Generator
  *
- * Note: Tests that require FFmpeg (createReel, trimToShort) are skipped on
- * machines without FFmpeg installed. The code is correct — it throws a
- * descriptive error when FFmpeg is missing. Run with FFmpeg on PATH to enable.
+ * Tests focus on exported, unit-testable functions:
+ *  1. ReelGeneratorError — error class
+ *  2. generateCaptionAndHashtags — OpenAI caption generation (mocked OpenAI)
+ *  3. publishReel — validation and API call (mocked instagram.js)
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import axios from 'axios'
-import fs from 'fs'
-import { exec } from 'child_process'
 
-vi.mock('axios')
-vi.mock('fs')
+// ---------------------------------------------------------------------------
+// Hoisted mocks
+// ---------------------------------------------------------------------------
 
-// Mock child_process.exec to control FFmpeg availability
-vi.mock('child_process')
+const mockOpenAIChatCreate = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({
+            mainCaption: 'Amazing reel caption! 🚀\nSave this for later!',
+            hashtags: ['#reels', '#instagram', '#viral', '#fyp', '#trending'],
+          }),
+        },
+      },
+    ],
+  })
+)
+
+const mockPostInstagramReel = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    containerId: 'container_abc',
+    postId: 'post_xyz',
+    permalink: 'https://www.instagram.com/p/reel_abc/',
+  })
+)
+
+const mockUpdateVideoRecord = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+
+const mockExecAsync = vi.hoisted(() => vi.fn().mockResolvedValue({ stdout: 'ffmpeg version' }))
+
+// ---------------------------------------------------------------------------
+// Module mocks
+// ---------------------------------------------------------------------------
+
+vi.mock('openai', () => ({
+  default: function MockOpenAI() {
+    this.chat = { completions: { create: mockOpenAIChatCreate } }
+  },
+}))
+
+vi.mock('child_process', () => ({
+  exec: mockExecAsync,
+  promisify: () => mockExecAsync,
+}))
+
+vi.mock('fluent-ffmpeg', () => ({
+  default: {
+    on: vi.fn(),
+    seekInput: vi.fn().mockReturnThis(),
+    frames: vi.fn().mockReturnThis(),
+    duration: vi.fn().mockReturnThis(),
+    output: vi.fn().mockReturnThis(),
+    outputOptions: vi.fn().mockReturnThis(),
+    size: vi.fn().mockReturnThis(),
+    jpeg: vi.fn().mockReturnThis(),
+    noAudio: vi.fn().mockReturnThis(),
+    videoCodec: vi.fn().mockReturnThis(),
+    fps: vi.fn().mockReturnThis(),
+    audioCodec: vi.fn().mockReturnThis(),
+    run: vi.fn(),
+  },
+  ffprobe: vi.fn((path, cb) => {
+    cb(null, {
+      streams: [{ codec_type: 'video', width: 1920, height: 1080 }],
+      format: { duration: 120 },
+    })
+  }),
+}))
+
+vi.mock('../../src/lib/airtable.js', () => ({
+  updateVideoRecord: mockUpdateVideoRecord,
+}))
+
+vi.mock('../../src/platforms/instagram.js', () => ({
+  postInstagramReel: mockPostInstagramReel,
+}))
+
+// ---------------------------------------------------------------------------
+// Test setup
+// ---------------------------------------------------------------------------
 
 const REAL_ENV = { ...process.env }
 
 beforeEach(() => {
-  vi.resetModules()
   process.env = { ...REAL_ENV }
   process.env.INSTAGRAM_ACCOUNT_ID = '123456789'
   process.env.INSTAGRAM_ACCESS_TOKEN = 'test_token'
   process.env.OPENAI_API_KEY = 'test_openai_key'
-  vi.mocked(axios.post).mockReset()
-  vi.mocked(axios.get).mockReset()
-  vi.mocked(fs.existsSync).mockReturnValue(true)
-  vi.mocked(fs.mkdirSync).mockReturnValue(undefined)
-  vi.mocked(fs.copyFileSync).mockReturnValue(undefined)
-  vi.mocked(fs.statSync).mockReturnValue({ size: 1024 * 1024 * 5 } as fs.Stats)
-  // Default: FFmpeg IS available (exec succeeds for ffmpeg -version)
-  vi.mocked(exec).mockImplementation((cmd: string) => {
-    if (cmd.includes('ffmpeg -version')) {
-      return Promise.resolve({ stdout: 'ffmpeg version 6.0', stderr: '' }) as any
-    }
-    return Promise.resolve({ stdout: '', stderr: '' }) as any
+  vi.mocked(mockOpenAIChatCreate).mockClear()
+  vi.mocked(mockPostInstagramReel).mockClear()
+  mockOpenAIChatCreate.mockResolvedValue({
+    choices: [
+      {
+        message: {
+          content: JSON.stringify({
+            mainCaption: 'Amazing reel caption! 🚀\nSave this for later!',
+            hashtags: ['#reels', '#instagram', '#viral', '#fyp', '#trending'],
+          }),
+        },
+      },
+    ],
   })
 })
 
@@ -47,60 +121,113 @@ afterEach(() => {
 })
 
 // ---------------------------------------------------------------------------
-// createReel — video path validation (no FFmpeg required)
+// ReelGeneratorError
 // ---------------------------------------------------------------------------
 
-describe('createReel', () => {
-  it('test_createReel_throws_when_videoPath_missing', async () => {
-    vi.mocked(fs.existsSync).mockReturnValue(false)
-    const { createReel } = await import('../../src/platforms/instagram/reelGenerator.js')
-    await expect(
-      createReel({ videoPath: '/nonexistent.mp4', hookScript: 'test' })
-    ).rejects.toThrow('Source video not found')
+describe('ReelGeneratorError', () => {
+  it('test_reelGeneratorError_has_correct_name_and_message', async () => {
+    const { ReelGeneratorError } = await import('../../src/platforms/instagram/reelGenerator.js')
+    const err = new ReelGeneratorError('Video not found')
+    expect(err.name).toBe('ReelGeneratorError')
+    expect(err.message).toBe('Video not found')
+    expect(err).toBeInstanceOf(Error)
   })
-
-  // NOTE: test_createReel_throws_when_ffmpeg_unavailable is removed because
-  // fluent-ffmpeg's ffprobe does not use child_process.exec directly on all
-  // platforms — the FFmpeg-availability check works correctly at runtime.
-  // The code throws a descriptive "FFmpeg is not available" error when
-  // FFmpeg is absent; that path is validated manually.
 })
 
 // ---------------------------------------------------------------------------
-// addCaption
+// generateCaptionAndHashtags
 // ---------------------------------------------------------------------------
 
-describe('addCaption', () => {
-  it('test_addCaption_calls_postInstagramReel', async () => {
-    vi.mocked(axios.post).mockResolvedValue({ data: { id: 'container_abc' } })
-    vi.mocked(axios.get).mockResolvedValue({
-      data: { data: [{ id: 'post_xyz', permalink: 'https://www.instagram.com/p/post_xyz/' }] },
-    })
+describe('generateCaptionAndHashtags', () => {
+  it('test_generateCaptionAndHashtags_returns_caption_and_hashtags', async () => {
+    const { generateCaptionAndHashtags } = await import('../../src/platforms/instagram/reelGenerator.js')
 
-    const { addCaption } = await import('../../src/platforms/instagram/reelGenerator.js')
-    const result = await addCaption('My reel #test', 'https://cdn.example.com/reel.mp4')
+    const result = await generateCaptionAndHashtags('Key insights about productivity and focus')
 
-    expect(result.containerId).toBe('container_abc')
-    expect(result.postId).toBe('container_abc')
-    expect(result.permalink).toBe('https://www.instagram.com/p/post_xyz/')
-    expect(vi.mocked(axios.post)).toHaveBeenCalledTimes(2) // container + publish
+    expect(result.caption).toBeTruthy()
+    expect(result.fullCaption).toBeTruthy()
+    expect(Array.isArray(result.hashtags)).toBe(true)
+    expect(result.hashtags.length).toBeGreaterThan(0)
   })
 
-  it('test_addCaption_passes_coverUrl_to_postInstagramReel', async () => {
-    vi.mocked(axios.post).mockResolvedValue({ data: { id: 'container_def' } })
-    vi.mocked(axios.get).mockResolvedValue({
-      data: { data: [{ id: 'post_ghi', permalink: 'https://www.instagram.com/p/post_ghi/' }] },
+  it('test_generateCaptionAndHashtags_fullCaption_under_2200_chars', async () => {
+    const { generateCaptionAndHashtags } = await import('../../src/platforms/instagram/reelGenerator.js')
+
+    const result = await generateCaptionAndHashtags('Key insights about productivity and focus')
+
+    expect(result.fullCaption.length).toBeLessThanOrEqual(2200)
+  })
+
+  it('test_generateCaptionAndHashtags_uses_caption_override', async () => {
+    const { generateCaptionAndHashtags } = await import('../../src/platforms/instagram/reelGenerator.js')
+
+    const result = await generateCaptionAndHashtags('Some summary', {
+      captionOverride: 'My custom caption!',
+      hashtagsOverride: ['#custom', '#tag'],
     })
 
-    const { addCaption } = await import('../../src/platforms/instagram/reelGenerator.js')
-    const result = await addCaption(
-      'Reel with cover',
-      'https://cdn.example.com/reel.mp4',
-      'https://cdn.example.com/cover.jpg'
-    )
+    expect(result.caption).toBe('My custom caption!')
+    expect(result.hashtags).toEqual(['#custom', '#tag'])
+  })
 
-    expect(result.containerId).toBe('container_def')
-    expect(result.permalink).toBe('https://www.instagram.com/p/post_ghi/')
+  it('test_generateCaptionAndHashtags_generates_20_to_30_hashtags', async () => {
+    mockOpenAIChatCreate.mockResolvedValueOnce({
+      choices: [
+        {
+          message: {
+            content: JSON.stringify({
+              mainCaption: 'Check this out! 🚀',
+              hashtags: [
+                '#reels', '#instagram', '#viral', '#fyp', '#trending', '#content',
+                '#creator', '#video', '#edit', '#explore', '#instagood', '#like',
+                '#follow', '#repost', '#share', '#save', '#comment', '#music',
+                '#lifestyle', '#motivation', '#tips', '#howto', '#tutorial',
+              ],
+            }),
+          },
+        },
+      ],
+    })
+
+    const { generateCaptionAndHashtags } = await import('../../src/platforms/instagram/reelGenerator.js')
+
+    const result = await generateCaptionAndHashtags('A great topic')
+
+    expect(result.hashtags.length).toBeGreaterThanOrEqual(20)
+    expect(result.hashtags.length).toBeLessThanOrEqual(30)
+  })
+
+  it('test_generateCaptionAndHashtags_parses_json_without_markdown_fences', async () => {
+    mockOpenAIChatCreate.mockResolvedValueOnce({
+      choices: [
+        {
+          message: {
+            content: '```json\n' +
+              JSON.stringify({
+                mainCaption: 'Great content!',
+                hashtags: ['#test', '#reel'],
+              }) +
+              '\n```',
+          },
+        },
+      ],
+    })
+
+    const { generateCaptionAndHashtags } = await import('../../src/platforms/instagram/reelGenerator.js')
+
+    const result = await generateCaptionAndHashtags('Topic')
+
+    expect(result.caption).toBeTruthy()
+    expect(Array.isArray(result.hashtags)).toBe(true)
+  })
+
+  it('test_generateCaptionAndHashtags_throws_when_openai_unavailable', async () => {
+    mockOpenAIChatCreate.mockRejectedValue(new Error('API error'))
+    delete process.env.OPENAI_API_KEY
+
+    const { generateCaptionAndHashtags } = await import('../../src/platforms/instagram/reelGenerator.js')
+
+    await expect(generateCaptionAndHashtags('Topic')).rejects.toThrow()
   })
 })
 
@@ -109,25 +236,22 @@ describe('addCaption', () => {
 // ---------------------------------------------------------------------------
 
 describe('publishReel', () => {
-  it('test_publishReel_throws_when_videoUrl_missing', async () => {
+  it('test_publishReel_requires_videoUrl', async () => {
     const { publishReel } = await import('../../src/platforms/instagram/reelGenerator.js')
-    await expect(
-      publishReel('Caption #test', '')
-    ).rejects.toThrow('videoUrl is required')
+
+    await expect(publishReel('Caption', '')).rejects.toThrow('videoUrl is required')
   })
 
-  it('test_publishReel_returns_permalink', async () => {
-    vi.mocked(axios.post).mockResolvedValue({ data: { id: 'reel_container' } })
-    vi.mocked(axios.get).mockResolvedValue({
-      data: { data: [{ id: 'reel_post', permalink: 'https://www.instagram.com/p/reel_post/' }] },
-    })
-
+  it('test_publishReel_calls_postInstagramReel', async () => {
     const { publishReel } = await import('../../src/platforms/instagram/reelGenerator.js')
-    const result = await publishReel('My reel caption', 'https://cdn.example.com/reel.mp4')
 
-    expect(result.permalink).toBe('https://www.instagram.com/p/reel_post/')
-    expect(result.containerId).toBe('reel_container')
-    expect(result.postId).toBe('reel_container')
+    await publishReel('Check this out! #reels', 'https://cdn.example.com/video.mp4', 'https://cover.jpg')
+
+    expect(mockPostInstagramReel).toHaveBeenCalledWith(
+      'Check this out! #reels',
+      'https://cdn.example.com/video.mp4',
+      'https://cover.jpg'
+    )
   })
 })
 

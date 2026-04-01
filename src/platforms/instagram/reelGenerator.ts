@@ -219,7 +219,7 @@ Rules:
 - Add 2-3 strategic emoji where they add value (not excessive)
 - NEVER use generic hashtag spam like #likeforlike or #follow4follow`
 
-async function generateCaptionAndHashtags(
+export async function generateCaptionAndHashtags(
   hookScript: string,
   options: { captionOverride?: string; hashtagsOverride?: string[] } = {}
 ): Promise<{ caption: string; hashtags: string[]; fullCaption: string }> {
@@ -702,3 +702,4 @@ export async function publishReel(
 // ---------------------------------------------------------------------------
 // End of src/platforms/instagram/reelGenerator.ts
 // ---------------------------------------------------------------------------
+
