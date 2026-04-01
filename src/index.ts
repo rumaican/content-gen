@@ -14,7 +14,7 @@ import { routeContent } from './pipelines/router.js'
 import { postTweet } from './platforms/twitter.js'
 import { postShare as postLinkedIn } from './platforms/linkedin.js'
 import { postInstagram } from './platforms/instagram.js'
-import { sendEmailSequence } from './platforms/email/sequences.js'
+import { sendEmailSequence } from './platforms/email/sequences/index.js'
 
 async function main() {
   console.log('🚀 Content Pipeline starting...')
