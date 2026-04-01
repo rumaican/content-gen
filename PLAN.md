@@ -1,125 +1,111 @@
-# Plan — Twitter Content Generator
+# PLAN.md — LinkedIn Content Generator
 
 ## Deliverables
-1. `src/prompts/twitterThread.ts` — LLM prompt + output schema
-2. `src/generators/twitterGenerator.ts` — main generator (fetch, LLM, validate, return)
-3. `src/generators/postAndNotify.ts` — post thread to Twitter + update Airtable
-4. `tests/unit/twitterGenerator.test.ts` — unit tests
+1. `src/prompts/linkedinPost.ts` — LLM prompt + output types
+2. `src/generators/linkedinGenerator.ts` — generation logic (fetch video, call LLM, validate)
+3. `src/generators/linkedinPoster.ts` — publish to LinkedIn API + update Airtable
 
----
+## Implementation Order
 
-## Step 1 — `src/prompts/twitterThread.ts`
+### Step 1: `src/prompts/linkedinPost.ts`
 
-**Purpose:** Define the system/user prompt for GPT-4o-mini to generate a coherent Twitter thread.
+Export:
+- `LINKEDIN_POST_MODEL = 'gpt-4o-mini'`
+- `linkedinPostSystemPrompt` — system prompt string
+- `buildLinkedInPostUserPrompt(input)` — user prompt builder
+- `LinkedInPostOutput` interface
+- `validateLinkedInOutput(output)` — validation function
 
-### System Prompt
-"You are a viral tweet writer for a B2B science/tech audience. Create engaging Twitter threads from video transcripts. Each tweet must be under 280 characters. Threads should be 3-10 tweets long. Include 1-2 relevant hashtags per thread and 1 CTA (call-to-action) in the final tweet. Extract the most impactful quote from the content to suggest as a pinned tweet candidate."
+### Step 2: `src/generators/linkedinGenerator.ts`
 
-### User Prompt Template
-```
-Video: "{title}" by {channelTitle}
-Transcript excerpt:
-{transcript}
+Export:
+- `LinkedInGeneratorError` — custom error class
+- `generateLinkedInContent(postTask, options?)` → `Promise<LinkedInPostOutput>`
+  - Fetches video from Airtable by videoId
+  - Calls LLM with prompt
+  - Parses JSON
+  - Validates output
+  - Returns LinkedInPostOutput
+- `hasTranscript(videoId)` — pre-flight check
 
-Desired tone: {tone} (professional/casual/controversial)
-```
+### Step 3: `src/generators/linkedinPoster.ts`
 
-### Output Schema (TypeScript)
+Export:
+- `postLinkedInContent(content, postTask, options?)` → `Promise<{ postId, postUrl }>`
+  - Idempotency check: skip if status='generated'
+  - Publish short post via `postShare()` (or article via dedicated method)
+  - Build permalink from postId
+  - Update Airtable Posts: status='generated', generatedContent JSON, postedAt, postUrl
+
+## LinkedInPostOutput Interface
 ```typescript
-interface TweetOutput {
-  text: string;         // max 280 chars
-  mediaSuggestion?: string; // e.g. "quote frame from 0:42"
+interface BulletPoint {
+  text: string;  // ≤200 chars each
 }
-interface TwitterThreadOutput {
-  tweets: TweetOutput[];
-  threadTheme: string;
-  pinnedQuote?: string;
-}
-```
 
----
-
-## Step 2 — `src/generators/twitterGenerator.ts`
-
-### `generateTwitterContent(postTask: PostTask): Promise<TwitterThreadOutput>`
-
-**Steps:**
-1. Look up VideoRecord from Airtable by `postTask.videoId`
-2. If no transcript → throw error with status='failed'
-3. Build user prompt with `title`, `channelTitle`, `transcript`, `tone` (from postTask or default)
-4. Call `openai.chat.completions.create` with GPT-4o-mini
-5. Parse JSON response → `TwitterThreadOutput`
-6. **Hard validate:** if any tweet > 280 chars, truncate/split
-7. **Cap:** if > 10 tweets, slice to 10
-8. Return `TwitterThreadOutput`
-
-### Validation Logic
-```typescript
-function validateTweet(text: string): string {
-  if (text.length <= 280) return text;
-  // Split on sentence boundary closest to 280
-  const split = text.lastIndexOf('. ', 275);
-  return split > 100 ? text.slice(0, split + 1) : text.slice(0, 277) + '…';
+interface LinkedInPostOutput {
+  shortPost: string;       // 150-300 chars
+  articleTitle: string;    // ≤70 chars
+  articleBody: string;     // 800-3000 chars (markdown with • bullets)
+  bulletPoints: BulletPoint[];  // 3-5 items
+  videoUrl: string;         // source video link
+  authorAttribution: string;  // e.g. "By @channel • Video"
 }
 ```
 
----
+## Validation Rules
+- shortPost: `trim().length >= 150 && trim().length <= 300`
+- articleTitle: `trim().length <= 70`
+- articleBody: `trim().length >= 800 && trim().length <= 3000`
+- bulletPoints: `length >= 3 && length <= 5`
+- bullet text: `length <= 200`
 
-## Step 3 — `src/generators/postAndNotify.ts`
+## LinkedIn Publishing Details
 
-### `postTwitterThread(thread: TwitterThreadOutput, postTask: PostTask): Promise<void>`
+### Short Post (share)
+```
+POST /v2/ugcPosts
+Author: urn:li:person:{personId}  OR  urn:li:organization:{orgId}
+lifecycleState: PUBLISHED
+specificContent: {
+  "com.linkedin.ugc.ShareContent": {
+    shareCommentary: { text: "<shortPost>\n\n<link>" },
+    shareMediaCategory: "NONE"
+  }
+}
+visibility: { "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC" }
+```
 
-**Steps:**
-1. Get Twitter client via `getTwitterClient()`
-2. Post first tweet → get `tweetId`
-3. For each subsequent tweet, reply to previous tweetId (`in_reply_to_status_id`)
-4. On 429 (rate limit): exponential backoff (1s, 2s, 4s, 8s, max 5 retries)
-5. Track posted tweet IDs
-6. Update Airtable Posts table:
-   - `status` = 'generated'
-   - `generatedContent` = JSON string of `{ tweets, threadTheme, postedTweetIds }`
-   - `postedAt` = ISO timestamp
-
-### Airtable Posts Table Update
-```typescript
-async function updatePostTaskStatus(postTaskId: string, data: Record<string, unknown>) {
-  // Patch by PostTaskId field
+### Article
+```
+POST /v2/ugcPosts
+Author: ...
+specificContent: {
+  "com.linkedin.ugc.ShareContent": {
+    shareCommentary: { text: "<articleTitle>\n\n<articleBody with bullets>" },
+    shareMediaCategory: "ARTICLE",
+    media: [{ status: "READY", originalUrl: "<videoUrl>", title: "<articleTitle>" }]
+  }
 }
 ```
 
----
-
-## Step 4 — Wire into Pipeline
-
-Add to `src/index.ts` or create `src/pipelines/twitterPoster.ts`:
-```typescript
-// Called by main generate loop — picks up twitter PostTasks
-export async function processTwitterPostTask(postTaskId: string) {
-  const postTask = await getPostTask(postTaskId); // fetch from Airtable Posts
-  const thread = await generateTwitterContent(postTask);
-  await postTwitterThread(thread, postTask);
+## Airtable Posts Update Fields
+```json
+{
+  "status": "generated",
+  "generatedContent": "<JSON.stringify(LinkedInPostOutput)>",
+  "postedAt": "<ISO timestamp>",
+  "postUrl": "<LinkedIn permalink URL>"
 }
 ```
 
----
+## Tests to Write
+1. `validateLinkedInOutput` — valid + invalid cases
+2. `validateTweet`-equivalent for short post length
+3. `buildLinkedInPostUserPrompt` — truncation behavior
+4. Generation with mock OpenAI response
 
-## Acceptance Criteria Checklist
-- [x] Generates 3-10 tweets from transcript
-- [x] Each tweet <280 chars (hard validated + corrected)
-- [x] Thread posts in correct order (first tweet, then replies via in_reply_to_status_id)
-- [x] Includes relevant hashtags and 1 CTA in final tweet
-- [x] Media suggestion included per tweet
-- [x] Airtable Posts table updated with status='generated' + generatedContent JSON
-
----
-
-## Edge Cases
-| Edge Case | Handling |
-|-----------|----------|
-| Empty transcript | Throw error, set status='failed' in Posts table |
-| Tweet > 280 chars | Truncate at sentence boundary near 280 |
-| > 10 tweets | Cap at 10, log warning |
-| 429 rate limit | Exponential backoff: 1→2→4→8s, max 5 retries |
-| Status already 'generated' | Skip (idempotent) |
-| Twitter auth expired | Propagate TwitterAuthError |
-| Airtable Posts table missing field | Gracefully skip optional fields |
+## Files Modified
+- `src/prompts/linkedinPost.ts` — CREATE
+- `src/generators/linkedInGenerator.ts` — CREATE
+- `src/generators/linkedinPoster.ts` — CREATE

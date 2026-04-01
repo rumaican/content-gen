@@ -5,7 +5,7 @@
 
 import type { ParsedVideo } from '../pipeline/types.js';
 
-const AIRTABLE_BASE = 'https://api.airtable.com/v0';
+export const AIRTABLE_BASE = 'https://api.airtable.com/v0';
 
 export const pipelineConfig = {
   downloadDir: process.env.DOWNLOAD_DIR || './downloads',

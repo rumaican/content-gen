@@ -1,61 +1,74 @@
-# BMAD Analysis — Twitter Content Generator
+# BMAD_ANALYSIS.md — LinkedIn Content Generator
 
-## Card
-- **Name:** [Content Generator] Twitter Content Generator
-- **Card ID:** 69c9aab7f915e38531e251b3
-- **ShortLink:** https://trello.com/c/OBGOCRhW
+## Card Summary
+- **What:** Generate LinkedIn posts and articles from video content (transcript + summary)
+- **Input:** PostTask (platform=linkedin) with videoId → fetch from Videos table
+- **Output:** Short post (150-300 chars) + long-form article (800-3000 chars), published to LinkedIn, saved to Airtable
 
-## What It Does
-Takes a PostTask from Airtable (platform=twitter) that contains a videoId, fetches the transcript/summary from Airtable Videos table, generates a 3-10 tweet thread via GPT-4o-mini, validates each tweet <280 chars, posts the thread to Twitter in order using in_reply_to_status_id threading, and updates the Airtable Posts table with status='generated'.
+## Acceptance Criteria (ACs)
+1. ✅ Generates both short post (150-300 chars) and long-form article
+2. ✅ Article includes 3-5 bullet points with key takeaways
+3. ✅ All posts include video link + author attribution
+4. ✅ Successfully publishes to LinkedIn (user or Company Page)
+5. ✅ Returns permalink and saves to Airtable Posts table
 
-## Inputs
-- `PostTask` from Airtable Posts table:
-  - `videoId` (string) — key to look up the video record
-  - `platform` = 'twitter'
-  - `contentType` = 'text' or 'quote'
-  - `priority` (1-3)
-- `VideoRecord` from Airtable Videos table:
-  - `videoId`, `title`, `transcript`, `duration`, `tags`, `channelTitle`
+## Existing Codebase Patterns
+- `src/generators/twitterGenerator.ts` — canonical generator pattern (fetch video, LLM call, validate, return)
+- `src/prompts/twitterThread.ts` — prompt + output types in same file
+- `src/platforms/linkedin.ts` — `postShare()`, `fetchLinkedInProfile()` already exist
+- `src/auth/linkedin.ts` — OAuth + token storage (`getStoredAccessToken()`, `getStoredOrgId()`)
+- `src/lib/airtable.ts` — `listVideos()`, `pipelineConfig`
+- `src/router/contentRouter.ts` — `PostTask` type: `{ platform, contentType, priority, videoId, status, estimatedEffort, routingExplanation }`
 
-## Outputs
-- Array of tweet strings + media suggestions
-- Twitter thread posted in correct order (first tweet, then replies via in_reply_to_status_id)
-- Airtable Posts table: `status` = 'generated', `generatedContent` = JSON of tweets
+## Key Design Decisions
 
-## Acceptance Criteria (from card)
-- [x] Generates 3-10 tweets from a transcript summary
-- [x] Each tweet is <280 characters (hard validate)
-- [x] Thread posts in correct order (first tweet, then replies)
-- [x] Includes relevant hashtags and 1 CTA
-- [x] Media suggestion included (if video has a quotable frame)
-- [x] Airtable Posts table updated with generated content + status='generated'
+### Generator ↔ Poster Split
+Following Twitter's pattern (`twitterGenerator.ts` → `postAndNotify.ts`), split into:
+- `linkedinGenerator.ts` — LLM generation only (pure, testable)
+- `linkedinPoster.ts` — API publish + Airtable update (side-effectful)
 
-## Dependencies
-- `twitter-api-v2` — already in package.json
-- `openai` — already in package.json
-- `src/lib/airtable.ts` — already exists (Posts + Videos tables)
-- `src/auth/twitter.ts` — already exists (getTwitterClient)
-- `src/prompts/summarize.ts` — reference for prompt pattern
+### Output Shape
+```typescript
+interface LinkedInContentOutput {
+  shortPost: string;       // 150-300 chars
+  articleTitle: string;    // headline
+  articleBody: string;     // 800-3000 chars with bullets
+  videoUrl: string;        // source video link
+  authorAttribution: string;
+}
+```
+
+### Content Types (from platforms.json)
+- `share` → short post (150-300 chars)
+- `article` → long-form (800-3000 chars, formatted with bullets)
+
+### LinkedIn API
+- User post: `POST /v2/ugcPosts` with author=`urn:li:person:{me}`
+- Org post: `POST /v2/ugcPosts` with author=`urn:li:organization:{orgId}`
+- Articles: `shareMediaCategory: 'ARTICLE'` + `title` field in `specificContent`
+
+### LLM Strategy
+- Model: `gpt-4o-mini` (same as Twitter, cost-efficient)
+- Single LLM call with structured JSON returning both short + long-form
+- Fall back to separate calls if needed
+
+### Prompt Design
+- System: LinkedIn thought leader persona
+- User: transcript excerpt + title + channel metadata
+- Output: JSON with shortPost + articleTitle + articleBody + bulletPoints[]
+
+### Validation
+- shortPost: ≤300 chars, ≥150 chars
+- articleBody: ≤3000 chars, ≥800 chars
+- bulletPoints: 3-5 items
+- Both include video link + author
 
 ## Edge Cases
-1. **Transcript empty/missing** — skip generation, log warning, mark status='failed' in Posts
-2. **LLM returns >10 tweets** — cap at 10, warn
-3. **LLM returns tweet >280 chars** — hard validate: if >280, split or truncate
-4. **Rate limit hit (429)** — back off with exponential retry (50 tweets/24h new account limit)
-5. **Airtable Posts table missing generatedContent field** — gracefully skip or store as JSON string
-6. **Twitter auth expired** — throw descriptive TwitterAuthError
-7. **Duplicate generation call** — check if status already 'generated' before reprocessing
-
-## File Locations (per card spec)
-- `src/prompts/twitterThread.ts` — prompt for GPT-4o-mini
-- `src/generators/twitterGenerator.ts` — main generation function
-- `src/generators/postAndNotify.ts` — posting to Twitter + Airtable update
-
-## Implementation Plan
-1. Create `src/prompts/twitterThread.ts` — system + user prompts + Zod schema
-2. Create `src/generators/twitterGenerator.ts` — fetch transcript → call LLM → validate → return tweets
-3. Create `src/generators/postAndNotify.ts` — thread-posting logic + Airtable update
-4. Add tests in `tests/unit/twitterGenerator.test.ts`
-5. Wire into `src/index.ts` or pipeline entry point
-
-## Effort: ~3 hours (per card estimate)
+1. **Empty/short transcript** → throw `LinkedInGeneratorError`, don't publish garbage
+2. **LLM returns markdown** → strip ```json fences before JSON.parse
+3. **Already generated** → idempotency check via Airtable status='generated'
+4. **LinkedIn API 429** → exponential backoff retry (up to 5 attempts)
+5. **No OAuth token** → clear error message pointing to OAuth setup
+6. **Video link missing** → use channel URL as fallback attribution
+7. **Bullets too long** → validate each bullet individually
+8. **Long transcript** → truncate to 12k chars (same as Twitter)
