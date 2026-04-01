@@ -20,8 +20,16 @@ const MUSIC_DIR = path.join(process.cwd(), 'assets', 'music')
  * @property {string} title
  */
 
+export interface TrackMeta {
+  filename: string
+  mood: 'upbeat' | 'chill' | 'cinematic' | 'trending'
+  bpm: number
+  duration: number
+  title: string
+}
+
 /** @type {TrackMeta[]} */
-const TRACKS = [
+const TRACKS: TrackMeta[] = [
   // Upbeat — high energy, viral TikTok vibes
   {
     filename: 'upbeat-viral.mp3',
@@ -91,30 +99,25 @@ function getManifest() {
     fs.writeFileSync(manifestPath, JSON.stringify(TRACKS, null, 2), 'utf-8')
   }
   const raw = fs.readFileSync(manifestPath, 'utf-8')
-  return JSON.parse(raw)
+  return JSON.parse(raw) as TrackMeta[]
 }
 
 /**
  * Returns all available tracks, optionally filtered by mood.
  * Falls back to 'upbeat' if mood is unknown.
- *
- * @param {{ mood?: string }} [opts]
- * @returns {TrackMeta[]}
  */
-export function listTracks(opts = {}) {
+export function listTracks(opts: { mood?: string } = {}): TrackMeta[] {
   const { mood } = opts
   const all = getManifest()
   if (!mood || mood === 'auto') return all
-  const normalized = all.filter((t) => t.mood === mood)
-  return normalized.length > 0 ? normalized : all.filter((t) => t.mood === 'upbeat')
+  const normalized = all.filter((t: TrackMeta) => t.mood === mood)
+  return normalized.length > 0 ? normalized : all.filter((t: TrackMeta) => t.mood === 'upbeat')
 }
 
 /**
  * Returns a single track path by filename.
- * @param {string} filename
- * @returns {string | null}
  */
-export function getTrackPath(filename) {
+export function getTrackPath(filename: string): string | null {
   const trackPath = path.join(MUSIC_DIR, filename)
   return fs.existsSync(trackPath) ? trackPath : null
 }
@@ -122,16 +125,12 @@ export function getTrackPath(filename) {
 /**
  * Picks the best track for a given mood and approximate video duration.
  * Mood 'auto' falls back to 'upbeat'.
- *
- * @param {{ mood?: string, duration?: number }} [opts]
- * @returns {TrackMeta | null}
  */
-export function pickTrack(opts = {}) {
+export function pickTrack(opts: { mood?: string; duration?: number } = {}): TrackMeta | null {
   const { mood = 'upbeat', duration } = opts
   const candidates = listTracks({ mood })
   if (!candidates.length) return null
-  // Prefer tracks that at least match the requested duration
-  const exact = candidates.find((t) => !duration || Math.abs(t.duration - duration) < 5)
+  const exact = candidates.find((t: TrackMeta) => !duration || Math.abs(t.duration - duration) < 5)
   return exact || candidates[0]
 }
 

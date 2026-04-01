@@ -48,10 +48,10 @@ export async function getProfile(): Promise<{
   }
 
   const me = await client.v2.me({
-    'user.fields': ['followers_count', 'following_count', 'description'],
+    'user.fields': ['followers_count', 'following_count', 'description'] as any,
   })
 
-  return me.data
+  return me.data as any
 }
 
 // ---------------------------------------------------------------------------
@@ -77,9 +77,11 @@ export async function getMyTweets(options: { maxResults?: number } = {}): Promis
     expansions: [],
   })
 
-  return tweets.data?.map((tweet) => ({
+  const data = tweets.data
+  if (!data) return []
+  return (Array.isArray(data) ? data : data.data ?? []).map((tweet) => ({
     id: tweet.id,
     text: tweet.text,
     created_at: tweet.created_at!,
-  })) || []
+  }))
 }

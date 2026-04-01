@@ -120,3 +120,7 @@ export async function postShare(options: PostShareOptions): Promise<{ id: string
 export async function postArticle(title: string, content: string, url: string): Promise<{ id: string }> {
   return postShare({ text: `${title}\n\n${content}`, url })
 }
+
+export async function postLinkedIn(content: string): Promise<{ id: string }> {
+  return postShare({ text: content })
+}

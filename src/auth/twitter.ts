@@ -11,7 +11,7 @@
  *   TWITTER_CLIENT_SECRET  — OAuth 2.0 Client Secret (optional)
  */
 
-import { TwitterApi } from 'twitter-api-v2'
+import { TwitterApi, TwitterApiTokens } from 'twitter-api-v2'
 
 const TWITTER_API_KEY = process.env.TWITTER_API_KEY
 const TWITTER_API_SECRET = process.env.TWITTER_API_SECRET
@@ -48,12 +48,13 @@ function ensureConfig(): void {
 export function getTwitterClient(): TwitterApi {
   ensureConfig()
 
-  return new TwitterApi({
-    appKey: TWITTER_API_KEY,
-    appSecret: TWITTER_API_SECRET,
-    accessToken: TWITTER_ACCESS_TOKEN,
-    accessSecret: TWITTER_ACCESS_SECRET,
-  })
+  const tokens: TwitterApiTokens = {
+    appKey: TWITTER_API_KEY!,
+    appSecret: TWITTER_API_SECRET!,
+    accessToken: TWITTER_ACCESS_TOKEN!,
+    accessSecret: TWITTER_ACCESS_SECRET!,
+  }
+  return new TwitterApi(tokens)
 }
 
 /**
@@ -71,8 +72,8 @@ export function getTwitterReadOnlyClient(): TwitterApi {
 // Connection verification
 // ---------------------------------------------------------------------------
 
-export async function getAccountInfo(): Promise<{ id: string; name: string; username: string; followers_count: number }> {
+export async function getAccountInfo(): Promise<{ id: string; name: string; username: string; followers_count?: number }> {
   const client = getTwitterClient().readOnly
-  const me = await client.v2.me()
-  return me.data
+  const me = await client.v2.me({ 'user.fields': ['followers_count'] as any })
+  return me.data as any
 }
