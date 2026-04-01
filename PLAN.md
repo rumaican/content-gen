@@ -1,133 +1,207 @@
-# Plan — [Pipeline] Whisper Transcription
+# Plan — Content Router
 
-## Context
-Pipeline stage: RSS Monitor → Video Downloader → **Whisper Transcription** → AI Summarizer → Content Generators.
-Input: downloaded audio file (mp3/mp4/m4a/wav). Output: transcript text + SRT subtitles, both saved to Airtable.
-
----
-
-## Implementation
-
-### 1. Install `srt` npm package
-```bash
-npm install srt
-```
-(Already in card spec; openai SDK already installed.)
+## Goal
+Build the dispatch/routing layer (`Content Router`) that takes a video record with transcript and decides which platforms (Twitter, Instagram, LinkedIn, TikTok, Email) should receive content.
 
 ---
 
-### 2. `src/utils/audioToSrt.ts`
-Converts Whisper word-level timestamp array → SRT subtitle string.
+## Step 1 — `src/router/platforms.json`
 
-```typescript
-interface WordTimestamp {
-  word: string;
-  start: number; // seconds
-  end: number;   // seconds
+Per-platform routing constraints loaded at runtime.
+
+```json
+{
+  "twitter": {
+    "maxLength": 280,
+    "maxPosts": 5,
+    "contentTypes": ["text", "thread"],
+    "minDuration": 0,
+    "maxDuration": null
+  },
+  "instagram": {
+    "maxLength": 2200,
+    "maxPosts": 2,
+    "contentTypes": ["caption", "reel"],
+    "minDuration": 15,
+    "maxDuration": null
+  },
+  "tiktok": {
+    "maxLength": 150,
+    "maxPosts": 2,
+    "contentTypes": ["text-overlay"],
+    "minDuration": 0,
+    "maxDuration": 60
+  },
+  "linkedin": {
+    "maxLength": 3000,
+    "maxPosts": 1,
+    "contentTypes": ["article", "share"],
+    "minDuration": 0,
+    "maxDuration": null,
+    "longFormThreshold": 600,
+    "educationalKeywords": ["how-to", "how to", "explainer", "tutorial", "guide", "explain"]
+  },
+  "email": {
+    "maxLength": null,
+    "maxPosts": 1,
+    "contentTypes": ["drip-email"],
+    "minTranscriptLength": 100
+  }
 }
-
-/**
- * Convert Whisper word timestamps to SRT format.
- * Groups consecutive words into subtitle entries (~3s max per entry).
- */
-export function wordsToSrt(words: WordTimestamp[]): string
 ```
-
-**SRT format rules:**
-- Sequential index starting at 1
-- Timecode: `HH:MM:SS,mmm --> HH:MM:SS,mmm`
-- Blank line between entries
-- Entry duration capped at ~3s to avoid too-long subtitles
 
 ---
 
-### 3. `src/pipelines/transcribe.ts`
-Main function: `async function transcribe(videoId: string, audioPath: string): Promise<TranscribeResult>`
+## Step 2 — `src/router/rules.ts`
 
-**TranscribeResult:**
+Pure functions for eligibility and scoring.
+
+### Eligibility Rules
+
+| Platform | Rule |
+|----------|------|
+| tiktok | duration < 60s (from platforms.json maxDuration) |
+| twitter | transcript has >3 bullet-worthy insights (short sentences ≤100 chars) |
+| instagram | has visual-related tags OR duration 15s–10min OR has hook phrases |
+| linkedin | long-form educational: duration >600s AND (how-to/explainer in title OR tags) |
+| email | transcript.length > minTranscriptLength (100 chars) |
+
+### Score Platform
+Each platform gets a base score of 0. Eligibile platforms get boosted:
+- tiktok: +1 if short, +2 if very short (<30s)
+- twitter: +1 per insight (max 4), +1 if tech/business keywords
+- instagram: +2 if visual tags, +1 if good duration
+- linkedin: +3 if educational keywords, +2 if long
+- email: +2 if rich transcript
+
+### Bullet-worthy Insight Detection
+- Split transcript on `. ` (period + space)
+- Count sentences ≤100 chars that aren't filler (no "um", "uh", "like ", length > 20)
+- Return count
+
+---
+
+## Step 3 — `src/router/contentRouter.ts`
+
+### Main Function
 ```typescript
-interface TranscribeResult {
+routeContent(videoRecord: VideoRecord): Promise<RouteResult>
+```
+
+Returns:
+```typescript
+interface RouteResult {
+  postTasks: PostTask[];
+  routingExplanation: string;
+}
+```
+
+### Steps inside routeContent:
+1. **Validate input** — missing transcript → warn + return `{postTasks:[], routingExplanation:"No transcript"}`
+2. **Load platforms.json** — read at runtime (cached)
+3. **Analyze video** — countInsights, detectTags, isEducational, duration
+4. **Score each platform** — for each platform: isEligible + scorePlatform
+5. **Select platforms** — pick top-scoring platforms, enforce maxPosts from config
+6. **Generate PostTasks** — 1 task per platform (or maxPosts count), priority from score
+7. **Save to Airtable** — call createPostTask for each task
+8. **Return** — {postTasks, routingExplanation}
+
+### PostTask structure
+```typescript
+interface PostTask {
+  platform: 'twitter' | 'instagram' | 'linkedin' | 'tiktok' | 'email';
+  contentType: string;
+  priority: number; // 1-3, 1=highest
   videoId: string;
-  transcript: string;
-  srtPath: string | null;  // null if SRT skipped
-  durationSeconds: number;
+  status: 'queued';
+  estimatedEffort: number; // minutes
+  routingExplanation: string;
 }
 ```
 
-**Steps within `transcribe()`:**
-1. Validate `OPENAI_API_KEY` env var exists
-2. Validate file extension (mp3/mp4/mpeg/mpga/m4a/wav/webm)
-3. Check file size ≤ 25MB; throw `FileTooLargeError` if exceeded
-4. Read audio file as `File` object (for OpenAI SDK)
-5. Call Whisper API:
-   ```
-   model: 'whisper-1'
-   file: audioFile
-   response_format: 'verbose_json'
-   timestamp_granularities: ['word']
-   ```
-6. Extract text and word timestamps from response
-7. Save transcript text → `$TRANSCRIPT_DIR/{videoId}.txt`
-8. If word timestamps exist → call `wordsToSrt()` → save → `$SRT_DIR/{videoId}.srt`
-9. Update Airtable Video record fields:
-   - `transcriptStatus`: `'completed'`
-   - `transcriptText`: full transcript string
-   - `srtPath`: path to SRT file (if generated)
-10. Return `TranscribeResult`
+---
 
-**Error types:**
+## Step 4 — `src/lib/airtable.ts` additions
+
+Add to `src/lib/airtable.ts`:
+
 ```typescript
-class FileTooLargeError extends Error  // >25MB
-class UnsupportedFormatError extends Error  // bad extension
-class TranscriptionError extends Error  // API failure
+// Posts table helper
+export interface PostTaskRecord {
+  platform: string;
+  contentType: string;
+  priority: number;
+  videoId: string;
+  status: 'queued';
+  estimatedEffort: number;
+  routingExplanation: string;
+}
+
+export async function createPostTask(task: PostTaskRecord): Promise<AirtableRecord> {
+  const url = `${baseUrl()}/Posts`;
+  const fields = {
+    PostTaskId: `pt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    videoId: task.videoId,
+    platform: task.platform,
+    contentType: task.contentType,
+    priority: task.priority,
+    status: task.status,
+    estimatedEffort: task.estimatedEffort,
+    routingExplanation: task.routingExplanation,
+  };
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Airtable createPostTask failed: ${res.status} ${body}`);
+  }
+  return (await res.json()) as AirtableCreateResponse;
+}
 ```
 
-**Airtable update failure** → log warning, don't re-throw (primary output already saved to disk).
+Also remove the stub `routeContent` from airtable.ts (replace with the real one in router).
 
 ---
 
-### 4. `src/pipelines/index.ts`
-Add export:
-```typescript
-export { transcribe } from './transcribe.js'
-```
-Keep existing `transcribeVideo` (YouTube URL path) and `summarize` etc.
+## Step 5 — Unit Tests
+
+### `tests/unit/rules.test.ts`
+- vitest, no mocks needed (pure functions)
+- Test all rule functions listed in BMAD_ANALYSIS.md
+
+### `tests/unit/contentRouter.test.ts`
+- Mock `src/lib/airtable.ts` with `vi.mock('./src/lib/airtable')`
+- Mock createPostTask to track calls
+- Test routeContent return shape and Airtable calls
 
 ---
 
-### 5. `.env.example`
-Add:
-```
-# Whisper Transcription
-TRANSCRIPT_DIR=./transcripts
-SRT_DIR=./outputs/srt
-```
+## Edge Cases
+
+1. **Missing optional fields** (tags: undefined) → treat as empty array, no crash
+2. **Transcript is whitespace only** → treat as empty, return []
+3. **All platforms ineligible** → return {postTasks: [], routingExplanation: "No eligible platforms"}
+4. **Airtable API failure** → throw descriptive error (not silent)
+5. **platforms.json missing fields** → use defaults (0, null, [])
+6. **Very long transcript** → insight detection capped at first 5000 chars for performance
+7. **Priority ties** → prefer platforms with higher base priority (linkedin=3, twitter=2, etc.)
 
 ---
 
-### 6. `tests/transcribe.test.ts`
-Using vitest.
+## Definition of Done Checklist
 
-**`audioToSrt` tests:**
-- Sequential numbering starts at 1 and increments
-- Timecode format `HH:MM:SS,mmm`
-- Groups words correctly
-- Empty input → empty string
-
-**`transcribe` tests:**
-- Validates file extension
-- Rejects file >25MB
-- Mocks OpenAI response, verifies transcript text extracted
-- Mocks Airtable PATCH call
-
----
-
-## Acceptance Criteria
-- [ ] `transcribe(videoId, audioPath)` returns `{ videoId, transcript, srtPath, durationSeconds }`
-- [ ] Transcript saved to `$TRANSCRIPT_DIR/{videoId}.txt`
-- [ ] SRT file generated at `$SRT_DIR/{videoId}.srt` with correct sequential numbering and timecodes
-- [ ] Airtable Video record updated with `transcriptStatus='completed'`, `transcriptText`, `srtPath`
-- [ ] `FileTooLargeError` thrown for files >25MB
-- [ ] `UnsupportedFormatError` thrown for unsupported file types
-- [ ] `TranscriptionError` on API failure (with 1 retry for transient errors)
-- [ ] Test suite passes: `npm test`
+- [ ] routeContent returns 3-8 PostTasks for standard video
+- [ ] PostTasks saved to Airtable with status='queued'
+- [ ] platforms.json change alters routing without code change
+- [ ] Empty transcript → warn + return [] (no crash)
+- [ ] Malformed videoRecord → error log + return [] (no crash)
+- [ ] Video <60s → TikTok included
+- [ ] No eligible platforms → empty array (not error)
+- [ ] Airtable failure → descriptive error thrown
+- [ ] routeContent < 500ms (no blocking I/O)
+- [ ] routingExplanation included on each PostTask
+- [ ] Unit tests for rules.ts and contentRouter.ts (>80% coverage intent)
+- [ ] Info-level logging for routing decisions

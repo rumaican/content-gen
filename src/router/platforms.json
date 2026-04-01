@@ -1,0 +1,56 @@
+{
+  "twitter": {
+    "maxLength": 280,
+    "maxPosts": 5,
+    "contentTypes": ["text", "thread"],
+    "minDuration": 0,
+    "maxDuration": null,
+    "basePriority": 2,
+    "insightBoostPerCount": 1,
+    "maxInsightBoost": 4,
+    "keywords": ["tech", "business", "ai", "startup", "growth", "strategy", "tips"]
+  },
+  "instagram": {
+    "maxLength": 2200,
+    "maxPosts": 2,
+    "contentTypes": ["caption", "reel"],
+    "minDuration": 15,
+    "maxDuration": null,
+    "basePriority": 3,
+    "visualKeywords": ["visual", "demo", "screen", "product", "show", "result", "before", "after", "transform"],
+    "durationOptimalMin": 15,
+    "durationOptimalMax": 300
+  },
+  "tiktok": {
+    "maxLength": 150,
+    "maxPosts": 2,
+    "contentTypes": ["text-overlay"],
+    "minDuration": 0,
+    "maxDuration": 60,
+    "basePriority": 2,
+    "shortBonus": 2,
+    "veryShortThreshold": 30
+  },
+  "linkedin": {
+    "maxLength": 3000,
+    "maxPosts": 1,
+    "contentTypes": ["article", "share"],
+    "minDuration": 0,
+    "maxDuration": null,
+    "basePriority": 3,
+    "longFormThreshold": 600,
+    "educationalKeywords": ["how-to", "how to", "explainer", "tutorial", "guide", "explain", "learn", "course"],
+    "educationalBonus": 3,
+    "longBonus": 2
+  },
+  "email": {
+    "maxLength": null,
+    "maxPosts": 1,
+    "contentTypes": ["drip-email"],
+    "minDuration": 0,
+    "maxDuration": null,
+    "basePriority": 1,
+    "minTranscriptLength": 100,
+    "richTranscriptBonus": 2
+  }
+}

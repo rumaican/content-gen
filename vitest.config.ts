@@ -6,4 +6,10 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.ts'],
   },
+  esbuild: {
+    target: 'node20',
+  },
+  resolve: {
+    extensions: ['.ts', '.js', '.json'],
+  },
 });

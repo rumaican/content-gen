@@ -1,94 +1,87 @@
-# BMAD Analysis — [Pipeline] Whisper Transcription
+# BMAD Analysis — Content Router
 
 ## Card
-- **ID:** 69c9aab3ab8008709c801ac3
-- **ShortLink:** https://trello.com/c/xYW2C0B9
-- **Stage:** RSS Monitor → Whisper Transcription → AI Summarizer → Content Generators
+- **ID:** 69c9aab42a45862d6efbfc05
+- **Name:** [Content Router] Content Router
+- **ShortLink:** https://trello.com/c/ZClMP0Wp
 
 ---
 
-## 1. Analysis
+## Analysis
 
-### What the Card Asks For
-Take a downloaded audio file (from yt-dlp) and send it to OpenAI Whisper API for transcription. Output:
-- Full transcript text → saved to Airtable Video record
-- SRT subtitles (from word-level timestamps) → file saved locally, path saved to Airtable
+### Business Context
+Dispatch/routing layer of the content pipeline. After videos are transcribed and summarized, the Content Router decides which platforms (Twitter, Instagram, LinkedIn, TikTok, Email) should receive content and what type.
 
-### Context in the Pipeline
-```
-RSS Monitor → Video Downloader → Whisper Transcription → AI Summarizer → Content Generators
-                                    ↑ HERE
-```
-Whisper runs AFTER the video/audio has been downloaded by the downloader pipeline.
-
-### Existing State
-- `src/pipelines/transcriber.ts` exists but uses `youtube-transcript-api` for YouTube URLs (not Whisper API for local files)
-- `src/pipelines/index.ts` already exports `transcribeVideo` from `transcriber.ts`
-- `openai` SDK is already in `package.json`
-- `srt` npm package is NOT yet installed (card explicitly requires it)
-- Airtable integration exists in `src/lib/airtable.ts` with `updateVideoRecord()`
-- Pipeline config in `src/lib/airtable.ts` has no `TRANSCRIPT_DIR` or `SRT_DIR` env vars yet
-
-### Scope
-**In scope:**
-- New `src/utils/audioToSrt.ts` — converts Whisper word-level timestamps to SRT
-- New `src/pipelines/transcribe.ts` — Whisper API transcription with SRT generation
-- Update `src/pipelines/index.ts` — add new transcribe export
-- Write `tests/transcribe.test.ts`
-- Add `srt` package to `package.json`
-- Env vars: `OPENAI_API_KEY`, `TRANSCRIPT_DIR`, `SRT_DIR` (add to `.env.example`)
-- Airtable update: save transcript text + SRT path to Video record
-
-**Out of scope:**
-- Video downloading (that's the previous pipeline stage)
-- YouTube transcript API (different approach, already implemented)
-- Content generation (next pipeline stage)
-
-### Edge Cases to Handle
-1. **File too large (>25MB)** — Whisper API limit; detect and throw clear error before API call
-2. **Unsupported format** — Whisper accepts: mp3, mp4, mpeg, mpga, m4a, wav, webm. Validate before sending
-3. **API failure / timeout** — wrap in try/catch with retry (1 retry for transient errors)
-4. **Missing OPENAI_API_KEY** — fail fast with clear message
-5. **Word timestamps not available** — if API returns without word-level data, generate SRT from segments if available, or skip SRT
-6. **Empty audio file** — Whisper returns empty; treat as error
-7. **Airtable update failure** — log warning, don't throw (transcript is the primary output)
+### User Story
+As the **automated content pipeline**, I want to analyze a video's transcript and metadata and produce a set of platform-specific PostTasks, so that downstream generators receive clear instructions on what content to create for each target platform.
 
 ---
 
-## 2. Plan
+## Acceptance Criteria Breakdown
 
-### Step 1: Create `src/utils/audioToSrt.ts`
-Convert Whisper word-level timestamp output to SRT subtitle format.
-- Input: Whisper word objects `{ word, start, end }`
-- Output: SRT string with correct sequential numbering, timecode formatting (HH:MM:SS,mmm)
-- Handle overlapping/adjacent words by grouping into subtitle entries
-
-### Step 2: Create `src/pipelines/transcribe.ts`
-Main transcription function.
-- Validate file format and size
-- Read audio file
-- Call `openai.audio.transcriptions.create({ model: 'whisper-1', file: ..., response_format: 'verbose_json', timestamp_granularities: ['word'] })`
-- Generate SRT from word timestamps using `audioToSrt.ts`
-- Save transcript `.txt` to `TRANSCRIPT_DIR/{videoId}.txt`
-- Save SRT to `SRT_DIR/{videoId}.srt`
-- Update Airtable Video record with transcript text + SRT file path
-- Return `{ transcript, srtPath, videoId }`
-
-### Step 3: Update `src/pipelines/index.ts`
-Add export for new `transcribe` function alongside existing exports.
-
-### Step 4: Update `.env.example`
-Add `TRANSCRIPT_DIR`, `SRT_DIR`.
-
-### Step 5: Write `tests/transcribe.test.ts`
-- Mock OpenAI API
-- Test SRT generation correctness (sequential numbering, timecode format)
-- Test file format validation
-- Test size limit check
-
-### Step 6: Install `srt` npm package
+| AC | Rule | Edge |
+|----|------|------|
+| AC1 | routeContent returns 3-8 PostTasks covering 2-5 platforms | standard video |
+| AC2 | duration < 60s → TikTok included | short video |
+| AC3 | transcript has >3 bullet-worthy insights → Twitter/thread included | insight-rich |
+| AC4 | long-form educational (>10min + how-to/explainer in title/tags) → LinkedIn Article | educational |
+| AC5 | missing/empty transcript → warn + return [] | no crash |
+| AC6 | platforms.json change → new rule applied without code change | configurable |
+| AC7 | PostTask saved to Airtable → status='queued', required fields populated | Airtable write |
 
 ---
 
-## 3. Effort
-**Estimated: 3 hours** (straightforward API call + SRT formatting)
+## Technical Notes from Card
+
+**Files to create:**
+- `src/router/platforms.json` — per-platform constraints (maxLength, maxPosts, contentTypes)
+- `src/router/rules.ts` — isEligible(platform, videoRecord), scorePlatform(platform, videoRecord)
+- `src/router/contentRouter.ts` — routeContent(videoRecord) → {postTasks, routingExplanation}
+- `tests/unit/rules.test.ts` — unit tests for rules
+- `tests/unit/contentRouter.test.ts` — unit tests for router
+
+**Files to modify:**
+- `src/lib/airtable.ts` — add createPostTask helper
+
+**Airtable Posts table schema:**
+- PostTaskId (text, primary)
+- videoId (text)
+- platform (select): twitter | instagram | linkedin | tiktok | email
+- contentType (select): text, thread, caption, reel, article, drip-email
+- priority (number): 1-3
+- status (select): queued | generated | published | failed
+- estimatedEffort (number) — minutes
+- scheduledTime (datetime) — optional
+- routingExplanation (long text)
+
+**Airtable Videos table fields used:**
+- videoId, transcript, title, duration, tags, routingStatus
+
+---
+
+## TDD Test Cases
+
+### rules.test.ts
+1. isEligible_returns_true_for_short_video_on_tiktok → {duration: 45} → tiktok eligible
+2. isEligible_returns_false_for_long_video_on_tiktok → {duration: 180} → tiktok NOT eligible
+3. isEligible_returns_true_for_insight_rich_transcript_on_twitter → 8 short sentences → twitter eligible
+4. isEligible_returns_false_for_short_transcript_on_twitter → 1 sentence → twitter NOT eligible
+5. scorePlatform_returns_higher_score_for_visual_hook_on_instagram → "visual hook" tag → instagram score > tiktok score
+6. isEligible_handles_missing_transcript_gracefully → {transcript: null} → no crash
+7. isEligible_respects_maxPosts_per_platform → maxPosts: 2 → max 2 posts
+
+### contentRouter.test.ts
+1. routeContent_returns_3_to_8_tasks → standard video → postTasks.length in [3,8]
+2. routeContent_returns_empty_array_for_unsupported_video → no eligible platforms → postTasks.length == 0
+3. routeContent_saves_postTasks_to_airtable → mock Airtable.create → called once per task
+
+---
+
+## Key Implementation Decisions
+
+1. **TypeScript** — project uses TS, all new files will be `.ts`
+2. **Pure rules** — rules.ts will be pure functions, fully unit-testable without mocking
+3. **Airtable REST** — use fetch-based REST calls (no airtable npm package in deps)
+4. **Configurable platforms.json** — read at runtime, not hardcoded
+5. **Insight detection** — short sentences (<100 chars) separated by periods = bullet-worthy
+6. **No LLM** — rule-based only, no AI calls in this step

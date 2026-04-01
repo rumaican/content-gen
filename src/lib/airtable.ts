@@ -54,16 +54,21 @@ function baseUrl() {
 
 export interface VideoRecord {
   videoId: string;
-  title: string;
-  channelId: string;
-  channelTitle: string;
-  publishedAt: string;
-  thumbnailUrl: string;
-  downloadStatus: 'pending' | 'downloading' | 'completed' | 'failed';
-  transcriptStatus: 'pending' | 'completed' | 'failed';
-  summaryStatus: 'pending' | 'completed' | 'failed';
-  processedStatus: 'pending' | 'in_progress' | 'completed' | 'failed';
-  dateDiscovered: string; // ISO 8601
+  title?: string;
+  channelId?: string;
+  channelTitle?: string;
+  publishedAt?: string;
+  thumbnailUrl?: string;
+  downloadStatus?: 'pending' | 'downloading' | 'completed' | 'failed';
+  transcriptStatus?: 'pending' | 'completed' | 'failed';
+  summaryStatus?: 'pending' | 'completed' | 'failed';
+  processedStatus?: 'pending' | 'in_progress' | 'completed' | 'failed';
+  dateDiscovered?: string;
+  // Fields read by Content Router
+  transcript?: string | null;
+  duration?: number | null;
+  tags?: string | null;
+  routingStatus?: 'pending' | 'routed' | 'failed';
 }
 
 /**
@@ -146,6 +151,54 @@ export async function createVideo(video: ParsedVideo): Promise<AirtableRecord> {
 }
 
 // ---------------------------------------------------------------------------
+// Posts table — Content Router PostTasks
+// ---------------------------------------------------------------------------
+
+export interface PostTaskRecord {
+  platform: string;
+  contentType: string;
+  priority: number;
+  videoId: string;
+  status: 'queued';
+  estimatedEffort: number;
+  routingExplanation: string;
+}
+
+/**
+ * Create a new PostTask record in the Airtable Posts table.
+ * Returns the created AirtableRecord.
+ */
+export async function createPostTask(task: PostTaskRecord): Promise<AirtableRecord> {
+  const url = `${baseUrl()}/Posts`;
+
+  const postTaskId = `pt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+  const fields: Record<string, unknown> = {
+    PostTaskId: postTaskId,
+    videoId: task.videoId,
+    platform: task.platform,
+    contentType: task.contentType,
+    priority: task.priority,
+    status: task.status,
+    estimatedEffort: task.estimatedEffort,
+    routingExplanation: task.routingExplanation,
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ fields }),
+  });
+
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`Airtable createPostTask failed: ${res.status} ${body}`);
+  }
+
+  return (await res.json()) as AirtableCreateResponse;
+}
+
+// ---------------------------------------------------------------------------
 // Settings table
 // ---------------------------------------------------------------------------
 
@@ -176,7 +229,7 @@ export async function getSetting(key: string): Promise<string | null> {
 }
 
 // ---------------------------------------------------------------------------
-// Generic update (stub kept for compatibility)
+// Generic update
 // ---------------------------------------------------------------------------
 
 export async function updateVideoRecord(
