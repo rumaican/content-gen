@@ -300,7 +300,7 @@ export async function saveToTrello(result: SummarizeResult): Promise<void> {
     platform: 'summary',
     contentType: 'multi-platform-summary',
     priority: 2,
-    status: 'pending' as const,
+    status: 'queued' as const,
     estimatedEffort: 0,
     routingExplanation: JSON.stringify({
       twitter_thread: result.summaries.twitter_thread,

@@ -15,16 +15,13 @@
  *   src/lib/airtable.ts  — record status updates
  */
 
-import { exec } from 'child_process'
-import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs'
 import ffmpeg from 'fluent-ffmpeg'
 import OpenAI from 'openai'
 import { postInstagramReel } from '../instagram.js'
 import { updateVideoRecord } from '../../lib/trello.js'
-
-const execAsync = promisify(exec)
+import { ffmpegReady } from '../../utils/ffmpegUtils.js'
 
 // ---------------------------------------------------------------------------
 // Config
@@ -70,18 +67,7 @@ function getOpenAIClient(): OpenAI {
 
 // ---------------------------------------------------------------------------
 // FFmpeg availability
-// ---------------------------------------------------------------------------
 
-async function ffmpegAvailable(): Promise<boolean> {
-  try {
-    await execAsync('ffmpeg -version', { timeout: 10_000 })
-    return true
-  } catch {
-    return false
-  }
-}
-
-// ---------------------------------------------------------------------------
 // FFmpeg run helpers (fluent-ffmpeg promise wrappers)
 // ---------------------------------------------------------------------------
 
@@ -286,7 +272,7 @@ async function trimToShort(
   outputPath: string,
   hookScript: string
 ): Promise<{ outputPath: string; startTime: number; duration: number }> {
-  const available = await ffmpegAvailable()
+  const available = await ffmpegReady()
   if (!available) throw new ReelGeneratorError('FFmpeg is not available on this system.')
 
   const info = await getVideoInfo(videoPath)
@@ -429,7 +415,7 @@ async function applyVerticalFormat(
   outputPath: string,
   hookText: string
 ): Promise<string> {
-  const available = await ffmpegAvailable()
+  const available = await ffmpegReady()
   if (!available) throw new ReelGeneratorError('FFmpeg is not available on this system.')
 
   const info = await getVideoInfo(inputPath)
@@ -561,7 +547,7 @@ export async function createReel(
     throw new ReelGeneratorError(`Source video not found: ${videoPath}`)
   }
 
-  const available = await ffmpegAvailable()
+  const available = await ffmpegReady()
   if (!available) {
     throw new ReelGeneratorError(
       'FFmpeg is not available. Install: choco install ffmpeg (Win) | brew install ffmpeg (macOS) | apt install ffmpeg (Linux)'

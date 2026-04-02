@@ -24,7 +24,7 @@ export const LISTS = {
 // HTTP helper
 // ---------------------------------------------------------------------------
 
-async function trelloFetch(path: string, options: RequestInit = {}): Promise<unknown> {
+export async function trelloFetch(path: string, options: RequestInit = {}): Promise<unknown> {
   const url = `${TRELLO_BASE}${path}`;
   const res = await fetch(url, {
     ...options,
@@ -64,6 +64,10 @@ export interface VideoRecord {
   tags?: string | null;
   routingStatus?: 'pending' | 'routed' | 'failed';
   srtPath?: string | null;
+  // Content publishing fields (used by Instagram Reel Generator)
+  status?: 'discovered' | 'processing' | 'published' | 'failed';
+  platform?: string;
+  permalink?: string;
 }
 
 /**
