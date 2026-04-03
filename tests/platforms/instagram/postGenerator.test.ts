@@ -369,8 +369,100 @@ describe('createCarouselPost', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests — extractCarouselFramesWithText (carousel slides with text overlays)
+// ---------------------------------------------------------------------------
+import { extractCarouselFramesWithText } from '../../../src/platforms/instagram/postGenerator.js';
+
+describe('extractCarouselFramesWithText', () => {
+  beforeEach(() => {
+    process.env.INSTAGRAM_ACCOUNT_ID = 'test-account-id';
+    process.env.INSTAGRAM_ACCESS_TOKEN = 'test-access-token';
+  });
+
+  afterEach(() => {
+    delete process.env.INSTAGRAM_ACCOUNT_ID;
+    delete process.env.INSTAGRAM_ACCESS_TOKEN;
+  });
+
+  it('extracts frames at each timestamp with text overlay', async () => {
+    const videoPath = createFakeVideo('carousel-text.mp4');
+    const slides = [
+      { text: 'Key insight number one', timestamp: 5 },
+      { text: 'Second key point here', timestamp: 30 },
+      { text: 'Final takeaway', timestamp: 60 },
+    ];
+
+    const result = await extractCarouselFramesWithText({
+      videoPath,
+      slides,
+      outputDir: TEST_OUTPUT_DIR,
+    });
+
+    expect(result).toHaveLength(3);
+    for (const [i] of slides.entries()) {
+      expect(result[i]).toMatch(/slide_text_\d+\.jpg$/);
+    }
+  });
+
+  it('rejects when more than 10 slides provided', async () => {
+    const videoPath = createFakeVideo('too-many-slides.mp4');
+    const tooMany = Array.from({ length: 11 }, (_, i) => ({
+      text: `Slide ${i}`,
+      timestamp: i * 10,
+    }));
+
+    await expect(
+      extractCarouselFramesWithText({ videoPath, slides: tooMany, outputDir: TEST_OUTPUT_DIR })
+    ).rejects.toThrow('At most 10 slides are allowed');
+  });
+
+  it('rejects when fewer than 2 slides provided', async () => {
+    const videoPath = createFakeVideo('too-few-slides.mp4');
+
+    await expect(
+      extractCarouselFramesWithText({
+        videoPath,
+        slides: [{ text: 'Only one', timestamp: 5 }],
+        outputDir: TEST_OUTPUT_DIR,
+      })
+    ).rejects.toThrow('At least 2 slides are required');
+  });
+
+  it('escapes special characters in text', async () => {
+    const videoPath = createFakeVideo('special-chars.mp4');
+    const slides = [
+      { text: "Test with 'single' and : colons", timestamp: 5 },
+      { text: 'Another with "double quotes"', timestamp: 30 },
+    ];
+
+    const result = await extractCarouselFramesWithText({
+      videoPath,
+      slides,
+      outputDir: TEST_OUTPUT_DIR,
+    });
+
+    expect(result).toHaveLength(2);
+  });
+
+  it('defaults outputDir to outputs/instagram', async () => {
+    const videoPath = createFakeVideo('default-dir.mp4');
+    const slides = [
+      { text: 'First', timestamp: 5 },
+      { text: 'Second', timestamp: 30 },
+    ];
+
+    const result = await extractCarouselFramesWithText({ videoPath, slides });
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toContain('outputs');
+    expect(result[0]).toContain('instagram');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — InstagramPostGeneratorError
 // ---------------------------------------------------------------------------
+
 describe('InstagramPostGeneratorError', () => {
   it('has correct name and message', () => {
     const err = new InstagramPostGeneratorError('test message');

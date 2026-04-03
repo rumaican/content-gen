@@ -478,5 +478,106 @@ export function addHashtags(caption: string, hashtags: string[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// CarouselSlide type
+// ---------------------------------------------------------------------------
+
+export interface CarouselSlide {
+  /** Text to overlay on this slide (at the key moment) */
+  text: string
+  /** Video timestamp in seconds to extract the frame */
+  timestamp: number
+}
+
+// ---------------------------------------------------------------------------
+// extractCarouselFramesWithText — carousel with text overlays
+// ---------------------------------------------------------------------------
+
+/**
+ * Escape a string for use inside FFmpeg drawtext filter.
+ * Handles: single quotes, colons, backslashes, newlines.
+ */
+function escapeFfmpegText(text: string): string {
+  return text
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "'\\''")
+    .replace(/:/g, '\\:')
+    .replace(/\n/g, ' ')
+    .slice(0, 200) // Safety cap for drawtext
+}
+
+/**
+ * Extract carousel frames from a video, each with a text overlay at a key moment.
+ *
+ * @param options.videoPath  — Source video path
+ * @param options.slides     — Array of {text, timestamp} for each slide
+ * @param options.outputDir  — Directory to save slide images (default: outputs/instagram)
+ */
+export async function extractCarouselFramesWithText(options: {
+  videoPath: string
+  slides: CarouselSlide[]
+  outputDir?: string
+}): Promise<string[]> {
+  const { videoPath, slides, outputDir = OUTPUT_DIR } = options
+
+  if (!existsSync(videoPath)) {
+    throw new InstagramPostGeneratorError(`Source video not found: ${videoPath}`)
+  }
+
+  if (!Array.isArray(slides) || slides.length < 2) {
+    throw new InstagramPostGeneratorError('At least 2 slides are required for a carousel')
+  }
+
+  if (slides.length > 10) {
+    throw new InstagramPostGeneratorError('At most 10 slides are allowed for a carousel')
+  }
+
+  await ensureOutputDir(outputDir)
+
+  const paths: string[] = []
+
+  for (let i = 0; i < slides.length; i++) {
+    const slide = slides[i]
+    const outputPath = join(outputDir, `slide_text_${i + 1}.jpg`)
+    const escapedText = escapeFfmpegText(slide.text)
+    const timestamp = Math.max(0, slide.timestamp)
+
+    // Build drawtext filter:
+    // - Center horizontally, near the bottom
+    // - White bold text with black shadow for readability
+    const textFilter = `drawtext=text='${escapedText}':` +
+      `fontsize=h*0.065:` +
+      `fontcolor=white:` +
+      `fontweight=bold:` +
+      `x=(w-text_w)/2:` +
+      `y=h-text_h-60:` +
+      `shadowcolor=black@0.6:` +
+      `shadowx=3:shadowy=3`
+
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg(videoPath)
+        .seekInput(timestamp)
+        .frames(1)
+        .outputOptions([
+          '-vf',
+          textFilter,
+          '-q:v',
+          '2', // JPEG quality
+        ])
+        .output(outputPath)
+        .jpeg()
+        .on('end', () => resolve())
+        .on('error', (err: Error) =>
+          reject(new InstagramPostGeneratorError(`FFmpeg carousel frame error: ${err.message}`))
+        )
+        .run()
+    })
+
+    paths.push(outputPath)
+  }
+
+  return paths
+}
+
+// ---------------------------------------------------------------------------
 // End of src/platforms/instagram/postGenerator.ts
 // ---------------------------------------------------------------------------
