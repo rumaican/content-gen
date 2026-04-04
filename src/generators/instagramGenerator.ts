@@ -15,7 +15,8 @@ import {
   generateInstagramCaption as genCaption,
 } from '../prompts/instagramCaption.js'
 
-import { createPostImage, createCarouselPost } from '../platforms/instagram/postGenerator.js'
+import { createPostImage, createCarouselPost, extractCarouselFramesWithText, CarouselSlide } from '../platforms/instagram/postGenerator.js'
+import { join } from 'path'
 import { createReel } from '../platforms/instagram/reelGenerator.js'
 
 // ---------------------------------------------------------------------------
@@ -123,12 +124,43 @@ export async function createInstagramPost(options: {
 export async function createInstagramCarousel(options: {
   videoPath: string
   summary: string
-  timestamps: number[]
-  imageUrls: string[]
+  timestamps?: number[]
+  imageUrls?: string[]
+  /** Text-overlay carousel slides. When provided, frames are extracted with text overlays. */
+  slides?: CarouselSlide[]
   captionOverride?: string
   hashtagsOverride?: string[]
   airtableRecordId?: string
 }): Promise<InstagramCarouselResult> {
+  // slides-based path: extract frames with text overlays, then create carousel
+  if (options.slides && options.slides.length >= 2) {
+    const outputDir = join(process.cwd(), 'outputs', 'instagram')
+    const extractedPaths = await extractCarouselFramesWithText({
+      videoPath: options.videoPath,
+      slides: options.slides,
+      outputDir,
+    })
+
+    // NOTE: extractedPaths are local file paths. In production, upload to a CDN
+    // and pass public URLs to createCarouselPost. Callers can handle hosting separately.
+    const result = await createCarouselPost({
+      videoPath: options.videoPath,
+      summary: options.summary,
+      timestamps: options.slides.map((s) => s.timestamp),
+      imageUrls: extractedPaths,
+      captionOverride: options.captionOverride,
+      hashtagsOverride: options.hashtagsOverride,
+      airtableRecordId: options.airtableRecordId,
+    })
+
+    return {
+      postId: result.postId,
+      containerId: result.containerId,
+      permalink: result.permalink,
+    }
+  }
+
+  // imageUrls path (original behaviour)
   if (!options.imageUrls || options.imageUrls.length < 2) {
     throw new InstagramGeneratorError('At least 2 image URLs are required for carousel')
   }
@@ -136,11 +168,11 @@ export async function createInstagramCarousel(options: {
   const result = await createCarouselPost({
     videoPath: options.videoPath,
     summary: options.summary,
-    timestamps: options.timestamps,
+    timestamps: options.timestamps ?? [],
     imageUrls: options.imageUrls,
     captionOverride: options.captionOverride,
     hashtagsOverride: options.hashtagsOverride,
-    })
+  })
 
   return {
     postId: result.postId,
