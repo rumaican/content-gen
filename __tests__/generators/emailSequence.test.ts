@@ -22,22 +22,11 @@ vi.mock('openai', () => ({
 }))
 
 // ---------------------------------------------------------------------------
-// Mock Airtable
+// Mock fetch (used for Airtable REST calls)
 // ---------------------------------------------------------------------------
 
-const mockAirtableCreate = vi.fn().mockResolvedValue({ id: 'seq_123' })
-const mockAirtableUpdate = vi.fn().mockResolvedValue({ id: 'seq_123', fields: {} })
-
-vi.mock('airtable', () => ({
-  default: {
-    base: vi.fn().mockReturnValue({
-      table: vi.fn().mockReturnValue({
-        create: mockAirtableCreate,
-        update: mockAirtableUpdate,
-      }),
-    }),
-  },
-}))
+const mockFetch = vi.fn()
+global.fetch = mockFetch
 
 // ---------------------------------------------------------------------------
 // Mock Resend
@@ -95,10 +84,13 @@ function mockLLMParseError() {
 describe('generateEmailSequence', () => {
   beforeEach(() => {
     mockCreate.mockClear()
-    mockAirtableCreate.mockClear()
-    mockAirtableUpdate.mockClear()
+    mockFetch.mockClear()
     mockResendSend.mockClear()
     mockResendSend.mockResolvedValue({ success: true, data: { id: 'msg_123' } })
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ records: [{ id: 'seq_123' }] }),
+    })
   })
 
   // -------------------------------------------------------------------------
@@ -393,6 +385,11 @@ describe('generateEmailSequence', () => {
     })
 
     expect(result.success).toBe(true)
-    expect(mockAirtableCreate).toHaveBeenCalled()
+    expect(mockFetch).toHaveBeenCalled()
+    // Verify Airtable was called with correct endpoint
+    const airtableCall = mockFetch.mock.calls.find(
+      (call) => call[0].includes('airtable.com')
+    )
+    expect(airtableCall).toBeDefined()
   })
 })
