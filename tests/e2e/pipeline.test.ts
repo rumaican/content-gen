@@ -38,11 +38,29 @@ vi.mock('openai', () => {
             choices: [
               {
                 message: {
-                  content:
-                    '🚀 New video! This tech overview covers software development best practices. #dev #coding',
+                  content: JSON.stringify({
+                    twitter_thread: [
+                      { text: '🚀 New video! This tech overview covers #softwaredevelopment best practices. #dev #coding', hashtag: true },
+                      { text: 'Key takeaway: clean code matters. Thread below 🧵', hashtag: false },
+                    ],
+                    linkedin_post: {
+                      text: 'Excited to share this deep dive on software development best practices. In this video, we explore clean code principles, testing strategies, and how to level up your engineering career.',
+                      comment: 'What\'s your biggest takeaway? Drop it in the comments 👇',
+                    },
+                    email_subject: [
+                      { subject: 'New Video: Software Development Best Practices', preview: 'Check out these key insights from our latest upload' },
+                      { subject: 'Don\'t Miss: Dev Tips from This Week', preview: 'Quick read with high-impact tips' },
+                    ],
+                    tiktok_script: {
+                      hook: 'POV: You finally understand clean code',
+                      body: 'Clean code isn\'t about making things pretty — it\'s about making things work for the next developer. Here are 3 principles that changed how I write code: 1) Name things intentionally 2) Keep functions small 3) Delete what you don\'t need.',
+                      cta: 'Follow for more dev tips',
+                    },
+                  }),
                 },
               },
             ],
+            usage: { prompt_tokens: 100, completion_tokens: 50 },
           }),
         },
       };
@@ -80,6 +98,11 @@ vi.mock('../../src/auth/twitter.js', () => ({
   },
   getTwitterReadOnlyClient: vi.fn(),
   getAccountInfo: vi.fn(),
+}));
+
+// Mock LinkedIn
+vi.mock('../../src/platforms/linkedin.js', () => ({
+  postShare: vi.fn().mockResolvedValue({ id: 'linkedin-post-123' }),
 }));
 
 // Mock axios for LinkedIn and other HTTP calls
