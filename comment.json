@@ -1,0 +1,1 @@
+{"text":"🚫 Blocked — Project context mismatch. This card references app/checkout, app/success, store/cart (maptoposter storefront). Current workspace is content-gen (content generation pipeline). Card references files that don't exist in this project."}
