@@ -1,1 +1,3 @@
-{"text":"🚫 Blocked — Project context mismatch. This card references app/checkout, app/success, store/cart (maptoposter storefront). Current workspace is content-gen (content generation pipeline). Card references files that don't exist in this project."}
+{
+  "text": "✅ Build PASSED | Tests: 10/10 new tests passing | TypeScript: clean | Commit: d6bc66c\n\nSummary:\n• POST /generate endpoint added to poster-generator/api/main.py\n• Returns 202 with job_id immediately (async, non-blocking)\n• Job status file created at poster-generator/api/jobs/{job_id}.json\n• Background task runs python generate_etsy_bundle.py with city/country/theme\n• Theme validation: midnight_blue, vintage, sepia, watercolor, dark\n• Missing/invalid fields return 422 (FastAPI validation)\n• Health check /health still works correctly"
+}
