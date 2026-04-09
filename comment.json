@@ -1,3 +1,1 @@
-{
-  "text": "✅ Build PASSED | Tests: 10/10 new tests passing | TypeScript: clean | Commit: d6bc66c\n\nSummary:\n• POST /generate endpoint added to poster-generator/api/main.py\n• Returns 202 with job_id immediately (async, non-blocking)\n• Job status file created at poster-generator/api/jobs/{job_id}.json\n• Background task runs python generate_etsy_bundle.py with city/country/theme\n• Theme validation: midnight_blue, vintage, sepia, watercolor, dark\n• Missing/invalid fields return 422 (FastAPI validation)\n• Health check /health still works correctly"
-}
+{"text": "Build: PASS | Tests: 12/12 PASS | generateEmailSequence generates 3-7 email drip sequences with spam-safe subjects, progressive delays 0-14 days, unsubscribe token, video URL in all emails, Resend scheduling, Airtable tracking."}
