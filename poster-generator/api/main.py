@@ -219,6 +219,65 @@ def root():
     )
 
 
+@app.get(
+    "/status/{job_id}",
+    responses={
+        200: {"description": "Job status found"},
+        400: {"description": "Invalid job_id format"},
+        404: {"description": "Job not found or expired"},
+    },
+)
+def get_job_status(job_id: str):
+    """
+    Get the status of a map generation job.
+
+    Returns job metadata including status (pending/running/complete/failed),
+    timestamps, and for complete jobs, the zip_path for download.
+
+    Jobs older than 7 days are considered expired and return 404.
+    """
+    # Validate UUID format
+    try:
+        uuid.UUID(job_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid job_id format")
+
+    job_file = JOBS_DIR / f"{job_id}.json"
+    if not job_file.exists():
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    try:
+        data = json.loads(job_file.read_text())
+    except Exception:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check expiration (7 days)
+    started_at = datetime.fromisoformat(data["started_at"].replace("Z", "+00:00"))
+    age = datetime.now(timezone.utc) - started_at
+    if age.days > 7:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Build safe response (exclude internal paths)
+    response = {
+        "job_id": data["job_id"],
+        "status": data["status"],
+        "city": data.get("city"),
+        "country": data.get("country"),
+        "theme": data.get("theme"),
+        "started_at": data.get("started_at"),
+    }
+
+    if data["status"] == "complete":
+        response["completed_at"] = data.get("completed_at")
+        response["zip_path"] = data.get("zip_path", "")
+        response["download_count"] = data.get("download_count", 0)
+
+    if data["status"] == "failed":
+        response["error"] = data.get("error", "Unknown error")
+
+    return JSONResponse(status_code=200, content=response)
+
+
 @app.post(
     "/generate",
     status_code=202,
