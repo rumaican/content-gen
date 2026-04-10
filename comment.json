@@ -1,1 +1,0 @@
-{"text": "Build: PASS | Tests: 12/12 PASS | generateEmailSequence generates 3-7 email drip sequences with spam-safe subjects, progressive delays 0-14 days, unsubscribe token, video URL in all emails, Resend scheduling, Airtable tracking."}
