@@ -15,9 +15,10 @@ export async function sendEmail(
   from: string,
   to: string | string[],
   subject: string,
-  html: string
+  html: string,
+  scheduledAt?: string
 ): Promise<{ success: boolean; data?: { id: string }; error?: unknown }> {
-  const params: SendEmailParams = { from, to, subject, html }
+  const params: SendEmailParams = { from, to, subject, html, scheduledAt }
   return _sendEmail(params)
 }
 

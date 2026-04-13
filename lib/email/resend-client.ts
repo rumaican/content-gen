@@ -48,6 +48,7 @@ export interface SendEmailParams {
   html: string
   from?: string
   text?: string
+  scheduledAt?: string
 }
 
 export type SendEmailResult =
@@ -66,6 +67,7 @@ export async function sendEmail({
   html,
   from,
   text,
+  scheduledAt,
 }: SendEmailParams): Promise<SendEmailResult> {
   const client = getResendClient()
   const fromAddress = from ?? process.env.RESEND_FROM_EMAIL ?? 'Map Store <onboarding@resend.dev>'
@@ -77,6 +79,7 @@ export async function sendEmail({
       subject,
       html,
       text,
+      scheduledAt,
     })
 
     if (error) {

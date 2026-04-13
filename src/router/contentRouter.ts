@@ -5,8 +5,8 @@
  * saves them to Airtable, and returns the result.
  */
 
-import { createPostTask, updateVideoRecord } from '../lib/trello.js';
-import type { VideoRecord as AirtableVideoRecord } from '../lib/trello.js';
+import { createPostTask, updateVideoRecord } from '../lib/airtable.js';
+import type { VideoRecord as AirtableVideoRecord } from '../lib/airtable.js';
 import {
   isEligible,
   scorePlatform,

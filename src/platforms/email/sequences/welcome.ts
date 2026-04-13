@@ -223,40 +223,14 @@ export async function sendWelcomeSequence(
   const from = opts.from || process.env.RESEND_FROM_EMAIL || 'Map Store <onboarding@resend.dev>'
 
   for (const email of emails) {
-    // AC4 fix: use Resend scheduled_at to delay emails by delayDays
-    let result: { success: boolean; data?: { id: string }; error?: unknown } = { success: false, error: 'Not implemented' }
+    const scheduledAt =
+      email.delayDays > 0
+        ? new Date(Date.now() + email.delayDays * 24 * 60 * 60 * 1000).toISOString()
+        : undefined
 
-    if (email.delayDays > 0) {
-      // Schedule email for future delivery
-      const scheduledAt = new Date(Date.now() + email.delayDays * 24 * 60 * 60 * 1000).toISOString()
-      // Import dynamically to avoid circular deps — use the underlying client directly
-      const { getResendClient } = await import('../../../../lib/email/resend-client.js')
-      const client = getResendClient()
-      const toAddresses = Array.isArray(opts.to) ? opts.to : [opts.to]
-      try {
-        const { data, error } = await client.emails.send({
-          from,
-          to: toAddresses,
-          subject: email.subject,
-          html: email.bodyHtml,
-          scheduledAt,
-        })
-        if (error) {
-          errors.push({ emailNumber: email.emailNumber, error })
-          result = { success: false, error }
-        } else {
-          result = { success: true, data: { id: data?.id ?? 'unknown' } }
-        }
-      } catch (err) {
-        errors.push({ emailNumber: email.emailNumber, error: err })
-        result = { success: false, error: err }
-      }
-    } else {
-      // Send immediately (day 0)
-      result = await sendEmail(from, opts.to, email.subject, email.bodyHtml)
-      if (!result.success) {
-        errors.push({ emailNumber: email.emailNumber, error: result.error })
-      }
+    const result = await sendEmail(from, opts.to, email.subject, email.bodyHtml, scheduledAt)
+    if (!result.success) {
+      errors.push({ emailNumber: email.emailNumber, error: result.error })
     }
   }
 
